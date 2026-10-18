@@ -2,7 +2,7 @@
 
 Run it from the project root:
 
-    uv run python -m scripts.seed               # add 1,000 tickets to support.db
+    uv run python -m scripts.seed               # add 1,000 tickets to the database
     uv run python -m scripts.seed --count 5000  # add a different number
     uv run python -m scripts.seed --seed 42     # the same tickets every run
     uv run python -m scripts.seed --reset       # delete every ticket first

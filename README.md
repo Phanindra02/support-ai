@@ -6,14 +6,25 @@ The build plan is in [docs/ROADMAP.md](docs/ROADMAP.md), and each finished stage
 
 ## Run it locally
 
-You need Python 3.14 and [uv](https://docs.astral.sh/uv/).
+You need Python 3.14, [uv](https://docs.astral.sh/uv/), and PostgreSQL 16. On a Mac, install and start PostgreSQL with Homebrew, then create a user and a database for the app:
 
 ```bash
+brew install postgresql@16
+echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc   # then open a new terminal
+brew services start postgresql@16        # runs in the background, and starts again at login
+createuser --pwprompt support            # asks you for a password
+createdb --owner support support
+```
+
+Copy `.env.example` to `.env`, and put that password in `DATABASE_URL`. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
+
+```bash
+cp .env.example .env
 uv sync
 uv run uvicorn app.main:app --reload
 ```
 
-Then open http://127.0.0.1:8000/docs to try the API. Tickets are saved in `support.db`, a SQLite file in the project folder.
+Then open http://127.0.0.1:8000/docs to try the API.
 
 Other commands:
 
@@ -43,7 +54,7 @@ uv run python -m scripts.weekly_report   # save a weekly report to reports/weekl
   "message": "Where is my order?",
   "status": "open",
   "priority": "medium",
-  "created_at": "2026-10-18T21:35:49",
+  "created_at": "2026-10-18T21:35:49.123456Z",
   "closed_at": null
 }
 ```
@@ -51,7 +62,7 @@ uv run python -m scripts.weekly_report   # save a weekly report to reports/weekl
 - `status` is `open`, `pending`, or `closed`. New tickets start `open`.
 - `priority` is `low`, `medium`, `high`, or `urgent`. New tickets start `medium`.
 - The server sets `created_at`. It sets `closed_at` when the ticket closes, and clears it if the ticket reopens.
-- Times are UTC. SQLite drops the timezone, so they show without one until the move to PostgreSQL in Stage 2.
+- Times are UTC, marked with a `Z`.
 
 ### Open a ticket
 

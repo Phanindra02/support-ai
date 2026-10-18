@@ -47,7 +47,7 @@ Done when: a tested ticket API runs locally on SQLite, and a Pandas script produ
 
 Done when: the API runs on Postgres with versioned migrations, measured index speedups, and Redis caching and rate limiting.
 
-- [ ] Install PostgreSQL with Homebrew and start it as a background service. Then create a database and user, and point SQLAlchemy at it through `DATABASE_URL` in `.env`.
+- [x] Install PostgreSQL with Homebrew and start it as a background service. Then create a database and user, and point SQLAlchemy at it through `DATABASE_URL` in `.env`.
 - [ ] Add Alembic so every schema change is a versioned migration, replacing `Base.metadata.create_all`.
 - [ ] Expand the schema into customers, agents, tickets, and messages (the back-and-forth on each ticket), linked with foreign keys.
 - [ ] Seed 100,000 tickets and run `EXPLAIN ANALYZE` on the list query.
