@@ -70,6 +70,8 @@ So the migration keeps the status index and leaves out the priority one. Every i
 
 **Write cost.** Inserting 100,000 tickets in a transaction that was rolled back took between 450 and 600 ms both with and without the two new indexes, varying from run to run (median of 7, three rounds each). At this size, the extra index work was smaller than the run-to-run noise on this laptop, so this measurement doesn't show a write cost.
 
+**A side effect worth knowing.** Those rolled-back inserts grew the tickets indexes from about 8 MB to about 386 MB. Postgres writes every row before it knows whether the transaction will commit, and a rollback only marks the rows dead. `VACUUM` made the space reusable but didn't shrink the files. `REINDEX TABLE tickets` rebuilt the indexes (18 MB for the table and indexes together), and re-running `scripts/explain_list.py` gave the same results as the table above, within the usual noise.
+
 ## Stats endpoint with and without the Redis cache (Stage 2)
 
 **What's measured.** `GET /stats` returns ticket counts by status, and the backlog (open or pending tickets) by priority. A cache miss runs two count queries in Postgres and saves the result in Redis for 60 seconds. A cache hit reads it back from Redis.

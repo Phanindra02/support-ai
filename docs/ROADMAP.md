@@ -59,7 +59,7 @@ Done when: the API runs on Postgres with versioned migrations, measured index sp
 
 ### System design
 
-- [ ] Learn how databases scale: indexes, read replicas, sharding, and SQL vs NoSQL trade-offs.
+- [x] Learn how databases scale: indexes, read replicas, sharding, and SQL vs NoSQL trade-offs.
 - [ ] Learn caching patterns (cache-aside, write-through, eviction) and rate-limiting algorithms (token bucket, sliding window).
 - [ ] Apply it: note which caching pattern and rate-limiting algorithm the project uses, and why.
 
