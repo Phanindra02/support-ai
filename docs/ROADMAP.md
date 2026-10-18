@@ -40,7 +40,7 @@ Done when: a tested ticket API runs locally on SQLite, and a Pandas script produ
 ### System design
 
 - [x] Learn how a request travels from browser to server: DNS, HTTP, and load balancers. The notes file `docs/system-design/01-request-journey.md` hasn't been written yet.
-- [ ] Learn REST API design: resource names, status codes, pagination, idempotency, and versioning.
+- [x] Learn REST API design: resource names, status codes, pagination, idempotency, and versioning.
 - [ ] Apply it: document the ticket endpoints, status codes, and pagination in the README.
 
 ## Stage 2: PostgreSQL and Redis
