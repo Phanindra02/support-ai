@@ -4,9 +4,11 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from redis import Redis
 from sqlalchemy import make_url, text
 from sqlalchemy.orm import sessionmaker
 
+from app.cache import get_redis, make_redis
 from app.config import PROJECT_ROOT, settings
 from app.database import Base, get_db, make_engine
 from app.main import app
@@ -28,6 +30,12 @@ def drop_everything(engine):
         connection.execute(text("CREATE SCHEMA public"))
 
 
+def redis_location(url):
+    """The host, port, and database number a Redis URL points at."""
+    options = Redis.from_url(url).connection_pool.connection_kwargs
+    return options.get("host"), options.get("port"), options.get("db", 0)
+
+
 @pytest.fixture(scope="session")
 def test_database_url():
     """The Postgres database the tests may empty. It can never be the app's real database."""
@@ -37,6 +45,27 @@ def test_database_url():
     if not make_url(url).database.endswith("_test") or url == settings.database_url:
         pytest.fail("TEST_DATABASE_URL must name a database ending in _test.", pytrace=False)
     return url
+
+
+@pytest.fixture(scope="session")
+def test_redis_url():
+    """The Redis database the tests may empty. It can never be the app's."""
+    url = settings.test_redis_url
+    if url is None:
+        pytest.fail("Set TEST_REDIS_URL in .env. See .env.example.", pytrace=False)
+    if redis_location(url) == redis_location(settings.redis_url):
+        pytest.fail("TEST_REDIS_URL must differ from REDIS_URL.", pytrace=False)
+    return url
+
+
+@pytest.fixture
+def redis_client(test_redis_url):
+    """The test Redis database, emptied before and after each test."""
+    client = make_redis(test_redis_url)
+    client.flushdb()
+    yield client
+    client.flushdb()
+    client.close()
 
 
 @pytest.fixture(scope="session")
@@ -84,14 +113,15 @@ def session_factory(engine):
 
 
 @pytest.fixture
-def client(session_factory):
-    """A test client whose requests use the test database instead of the app's."""
+def client(session_factory, redis_client):
+    """A test client whose requests use the test database and Redis instead of the app's."""
 
     def get_test_db():
         with session_factory() as db:
             yield db
 
     app.dependency_overrides[get_db] = get_test_db
+    app.dependency_overrides[get_redis] = lambda: redis_client
     yield TestClient(app)
     app.dependency_overrides.clear()
 

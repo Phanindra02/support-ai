@@ -69,3 +69,22 @@ The status index is different. The list doesn't use it either, but count queries
 So the migration keeps the status index and leaves out the priority one. Every index takes space and has to be updated on every insert, so an index nothing uses is all cost.
 
 **Write cost.** Inserting 100,000 tickets in a transaction that was rolled back took between 450 and 600 ms both with and without the two new indexes, varying from run to run (median of 7, three rounds each). At this size, the extra index work was smaller than the run-to-run noise on this laptop, so this measurement doesn't show a write cost.
+
+## Stats endpoint with and without the Redis cache (Stage 2)
+
+**What's measured.** `GET /stats` returns ticket counts by status, and the backlog (open or pending tickets) by priority. A cache miss runs two count queries in Postgres and saves the result in Redis for 60 seconds. A cache hit reads it back from Redis.
+
+**Setup.** The same 100,000 tickets and machine as above, plus Redis 8.10.2 from Homebrew. The API ran under uvicorn on the same machine, with one worker.
+
+**Method.** `uv run python -m scripts.measure_cache` sends 200 requests that miss (it deletes the cached counts before each one) and then 200 that hit, checking the `X-Cache` header on every response. Times are measured by the script, so they include the HTTP round trip on this machine. It was run twice.
+
+| | Median | 95th percentile |
+| --- | ---: | ---: |
+| Miss (counted in Postgres) | 5.8 to 6.2 ms | 10.7 to 12.3 ms |
+| Hit (read from Redis) | 0.7 to 1.0 ms | 1.3 to 1.5 ms |
+
+A hit was **6 to 8.5 times faster** at the median.
+
+The latency gain is real but small, because Postgres counts 100,000 rows in a few milliseconds with the status index. The bigger win is load. If 100 agents' dashboards each refreshed every 10 seconds, that would be 10 requests a second. Without the cache, Postgres would run 20 count queries a second. With it, Postgres runs 2 queries a minute (or whenever a ticket changes, from the next step on), however many agents are watching.
+
+**Redis down.** With redis-py's default settings, every command against a stopped Redis retried with growing waits and took 2.7 seconds. The cache client turns retries off and times out after 0.5 seconds, so with Redis down a request skips the cache and is answered from Postgres. A test checks that it takes under half a second.

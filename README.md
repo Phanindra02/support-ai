@@ -6,7 +6,7 @@ The build plan is in [docs/ROADMAP.md](docs/ROADMAP.md), and each finished stage
 
 ## Run it locally
 
-You need Python 3.14, [uv](https://docs.astral.sh/uv/), and PostgreSQL 16. On a Mac, install and start PostgreSQL with Homebrew, then create a user and a database for the app:
+You need Python 3.14, [uv](https://docs.astral.sh/uv/), PostgreSQL 16, and Redis. On a Mac, install and start them with Homebrew, then create a user and a database for the app:
 
 ```bash
 brew install postgresql@16
@@ -15,9 +15,11 @@ brew services start postgresql@16        # runs in the background, and starts ag
 createuser --pwprompt support            # asks you for a password
 createdb --owner support support
 createdb --owner support support_test    # the tests' own database, which they empty
+brew install redis
+brew services start redis
 ```
 
-Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST_DATABASE_URL`. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
+Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST_DATABASE_URL`. The Redis URLs work as they are. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
 
 ```bash
 cp .env.example .env
@@ -37,6 +39,7 @@ uv run pytest                            # run the tests on support_test, never 
 uv run python -m scripts.seed            # add 1,000 realistic fake tickets
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
 uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANALYZE (seed 100,000 first)
+uv run python -m scripts.measure_cache   # time GET /stats with and without the cache (API running)
 ```
 
 ## API
@@ -48,6 +51,7 @@ uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANAL
 | `GET` | `/tickets/{ticket_id}` | Get one ticket | 200 |
 | `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | 200 |
 | `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | 200 |
+| `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | 200 |
 
 ### A ticket
 
@@ -136,6 +140,23 @@ curl -X PATCH http://127.0.0.1:8000/tickets/1 \
 
 Send `status`, `priority`, or both. A body with neither, or with any other field, gets a 422. Closing a ticket sets `closed_at`, closing it again keeps the first time, and reopening it (to `open` or `pending`) clears it. Sending the same update twice has the same effect as sending it once.
 
+### Ticket counts
+
+```bash
+curl -i http://127.0.0.1:8000/stats
+```
+
+```json
+{
+  "by_status": {"open": 4701, "pending": 2546, "closed": 92753},
+  "backlog_by_priority": {"low": 2768, "medium": 3069, "high": 1030, "urgent": 380}
+}
+```
+
+`by_status` counts every ticket. `backlog_by_priority` counts the tickets not closed yet (open or pending), which is the work still waiting.
+
+The counts are cached in Redis for 60 seconds. The `X-Cache` header says `HIT` if they came from the cache, or `MISS` if they were just counted in the database. If Redis is down, the API counts in the database every time instead of failing.
+
 ### Status codes
 
 | Code | When |
@@ -171,7 +192,7 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 ## Project layout
 
-- `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, and `database.py` the database connection.
+- `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, and `config.py` the settings.
 - `alembic/`: database migrations.
 - `scripts/`: the seed script and the weekly report.
 - `tests/`: pytest tests.

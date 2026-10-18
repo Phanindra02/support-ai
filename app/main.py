@@ -6,13 +6,22 @@ from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
-from sqlalchemy import Select, select
+from redis import Redis
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.cache import get_redis, read_cache, write_cache
 from app.database import get_db
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
-from app.schemas import ErrorResponse, MessageRead, TicketCreate, TicketRead, TicketUpdate
+from app.schemas import (
+    ErrorResponse,
+    MessageRead,
+    StatsRead,
+    TicketCreate,
+    TicketRead,
+    TicketUpdate,
+)
 
 
 # Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
@@ -20,6 +29,11 @@ app = FastAPI(title="Support AI")
 
 # Shortcut: any endpoint with a `db: SessionDep` parameter gets its own database session.
 SessionDep = Annotated[Session, Depends(get_db)]
+RedisDep = Annotated[Redis, Depends(get_redis)]
+
+# Where the stats are cached in Redis, and for how long.
+STATS_KEY = "stats:tickets"
+STATS_CACHE_SECONDS = 60
 
 # The largest number a Postgres integer column can hold. No ticket id can be bigger, so no
 # useful skip can be either, and bigger numbers would crash the database call with a 500.
@@ -85,6 +99,23 @@ def ticket_list_query(
     return query.offset(skip).limit(limit)
 
 
+def count_tickets(db: Session) -> StatsRead:
+    """Count tickets by status, and the backlog (open or pending) by priority."""
+    by_status = dict(db.execute(select(Ticket.status, func.count()).group_by(Ticket.status)).all())
+    # IN (open, pending) rather than != closed, so Postgres can use the status index.
+    backlog = dict(
+        db.execute(
+            select(Ticket.priority, func.count())
+            .where(Ticket.status.in_([TicketStatus.open, TicketStatus.pending]))
+            .group_by(Ticket.priority)
+        ).all()
+    )
+    return StatsRead(
+        by_status={status: by_status.get(status, 0) for status in TicketStatus},
+        backlog_by_priority={priority: backlog.get(priority, 0) for priority in TicketPriority},
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> Response:
     """Return FastAPI's standard 422, even for input that can't be repeated back.
@@ -129,6 +160,26 @@ def list_tickets(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     return db.scalars(ticket_list_query(status, priority, skip, limit)).all()
+
+
+@app.get("/stats", response_model=StatsRead)
+def get_stats(db: SessionDep, redis: RedisDep, response: Response):
+    """Ticket counts for the dashboard, cached in Redis for 60 seconds.
+
+    The X-Cache header says whether the counts came from the cache (HIT) or were just
+    counted in the database (MISS).
+    """
+    # Cache-aside: look in the cache first. On a miss, count in the database and save the
+    # result, so requests in the next 60 seconds skip the database.
+    cached = read_cache(redis, STATS_KEY)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return StatsRead.model_validate_json(cached)
+
+    stats = count_tickets(db)
+    write_cache(redis, STATS_KEY, stats.model_dump_json(), STATS_CACHE_SECONDS)
+    response.headers["X-Cache"] = "MISS"
+    return stats
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketRead, responses=NOT_FOUND)

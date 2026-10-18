@@ -52,7 +52,7 @@ Done when: the API runs on Postgres with versioned migrations, measured index sp
 - [x] Expand the schema into customers, agents, tickets, and messages (the back-and-forth on each ticket), linked with foreign keys.
 - [x] Seed 100,000 tickets and run `EXPLAIN ANALYZE` on the list query.
 - [x] Add indexes on status, priority, and created time, measure again, and record the before and after numbers in `docs/results.md`. Priority was measured and left out: the planner never used it (see `docs/results.md`).
-- [ ] Install Redis with Homebrew, start it as a background service, and cache a stats endpoint (open ticket counts) for 60 seconds.
+- [x] Install Redis with Homebrew, start it as a background service, and cache a stats endpoint (open ticket counts) for 60 seconds.
 - [ ] Clear the cache whenever a ticket changes.
 - [ ] Add rate limiting with Redis, such as 60 requests per minute per IP.
 - [x] Point the tests at a separate test database.

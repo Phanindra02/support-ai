@@ -91,6 +91,31 @@ class MessageRead(BaseModel):
     created_at: datetime
 
 
+class StatsRead(BaseModel):
+    """Ticket counts for the support team's dashboard."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "by_status": {"open": 4701, "pending": 2546, "closed": 92753},
+                    "backlog_by_priority": {
+                        "low": 2768,
+                        "medium": 3069,
+                        "high": 1030,
+                        "urgent": 380,
+                    },
+                }
+            ]
+        }
+    )
+
+    # Every status, with 0 for one that no ticket has.
+    by_status: dict[TicketStatus, int]
+    # Tickets not closed yet (open or pending), by priority: the work still waiting.
+    backlog_by_priority: dict[TicketPriority, int]
+
+
 class TicketUpdate(BaseModel):
     """What an agent sends to change a ticket: status, priority, or both."""
 

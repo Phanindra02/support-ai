@@ -24,5 +24,11 @@ class Settings(BaseSettings):
     # Only the tests use this. They empty this database, so it must never be the real one.
     test_database_url: str | None = None
 
+    # Redis, for the cache. The number at the end picks one of Redis's numbered databases.
+    redis_url: str
+
+    # Only the tests use this. They empty this Redis database, so it must differ from REDIS_URL.
+    test_redis_url: str | None = None
+
 
 settings = Settings()
