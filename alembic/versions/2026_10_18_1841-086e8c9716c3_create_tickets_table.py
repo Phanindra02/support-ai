@@ -35,7 +35,10 @@ def upgrade() -> None:
         sa.Column("status", ticket_status, nullable=False),
         sa.Column("priority", ticket_priority, nullable=False),
         sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_tickets")),

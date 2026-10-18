@@ -1,8 +1,8 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -22,14 +22,56 @@ class TicketPriority(enum.StrEnum):
     urgent = "urgent"
 
 
+class MessageSender(enum.StrEnum):
+    customer = "customer"
+    agent = "agent"
+    # The Stage 6 bot. Listed now, because adding a value to a Postgres enum type later
+    # takes a migration of its own.
+    bot = "bot"
+
+
+class Customer(Base):
+    """Someone who contacts support. Their phone number identifies them."""
+
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    # One customer per number. The unique constraint also gives the column an index, so
+    # finding a customer by phone, as every WhatsApp message will in Stage 3, is fast.
+    phone: Mapped[str] = mapped_column(String(20), unique=True)  # E.164, e.g. +16145550123
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="customer")
+
+
+class Agent(Base):
+    """A member of the support team. Stage 3 adds passwords and roles."""
+
+    __tablename__ = "agents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(254), unique=True)  # The longest valid address.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="agent")
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    customer_name: Mapped[str] = mapped_column(String(100))
-    phone: Mapped[str] = mapped_column(String(20))  # E.164 format, e.g. +16145550123
+    # Postgres doesn't index foreign keys by itself. These indexes make "this customer's
+    # tickets" fast, and the joins between the tables.
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    # The agent handling the ticket. Empty until someone picks it up.
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), index=True)
     subject: Mapped[str] = mapped_column(String(200))
-    message: Mapped[str] = mapped_column(Text)
     # validate_strings=True makes SQLAlchemy reject anything not on the list.
     status: Mapped[TicketStatus] = mapped_column(
         Enum(TicketStatus, validate_strings=True), default=TicketStatus.open
@@ -41,3 +83,23 @@ class Ticket(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    customer: Mapped[Customer] = relationship(back_populates="tickets")
+    agent: Mapped[Agent | None] = relationship(back_populates="tickets")
+    messages: Mapped[list["Message"]] = relationship(back_populates="ticket")
+
+
+class Message(Base):
+    """One message in a ticket's conversation."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), index=True)
+    sender: Mapped[MessageSender] = mapped_column(Enum(MessageSender, validate_strings=True))
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    ticket: Mapped[Ticket] = relationship(back_populates="messages")

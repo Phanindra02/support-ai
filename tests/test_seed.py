@@ -1,15 +1,16 @@
-"""The seed script makes realistic tickets: spread over 12 weeks, mostly closed when older."""
+"""The seed script makes realistic data: spread over 12 weeks, mostly closed when older."""
 
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
 import pytest
 from sqlalchemy import create_engine, func, select
 
-from app.models import Ticket, TicketPriority, TicketStatus
+from app.models import Agent, Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
 from app.schemas import E164_PATTERN
-from scripts.seed import WEEKS, add_fake_tickets, main, make_tickets
+from scripts.seed import PHONE_COUNT, WEEKS, add_fake_tickets, main, make_tickets, phone_number
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
 
@@ -24,12 +25,17 @@ def hours_to_close(ticket):
     return (ticket.closed_at - ticket.created_at).total_seconds() / 3600
 
 
-def test_makes_the_requested_number_of_tickets(tickets):
+def count_rows(db, model):
+    return db.scalar(select(func.count()).select_from(model))
+
+
+# Tickets made in memory
+
+
+def test_makes_the_requested_number_of_tickets_oldest_first(tickets):
     assert len(tickets) == 1000
-
-
-def test_phone_numbers_are_e164(tickets):
-    assert all(re.fullmatch(E164_PATTERN, ticket.phone) for ticket in tickets)
+    created = [ticket.created_at for ticket in tickets]
+    assert created == sorted(created)
 
 
 def test_created_times_spread_over_the_last_12_weeks(tickets):
@@ -75,26 +81,88 @@ def test_every_status_and_priority_shows_up(tickets):
     assert {ticket.priority for ticket in tickets} == set(TicketPriority)
 
 
+def test_conversations_follow_the_ticket(tickets):
+    for ticket in tickets:
+        first, *replies = ticket.messages
+        # Every ticket starts with the customer's message, sent when the ticket opened.
+        assert first.sender == MessageSender.customer
+        assert first.created_at == ticket.created_at
+        # Open tickets are still waiting for an agent. Pending and closed ones got a reply.
+        if ticket.status == TicketStatus.open:
+            assert replies == []
+        else:
+            assert replies[0].sender == MessageSender.agent
+        times = [message.created_at for message in ticket.messages]
+        assert times == sorted(times)
+        assert times[-1] <= (ticket.closed_at or NOW)
+
+
 def test_the_same_seed_makes_the_same_tickets():
     def summary(ticket):
-        return (ticket.customer_name, ticket.phone, ticket.subject, ticket.created_at)
+        return (ticket.subject, ticket.priority, ticket.created_at, ticket.messages[0].body)
 
     first = make_tickets(20, seed=7, now=NOW)
     second = make_tickets(20, seed=7, now=NOW)
     assert [summary(t) for t in first] == [summary(t) for t in second]
 
 
-def test_add_fake_tickets_saves_them_and_reset_clears_old_ones(session_factory):
-    def count(db):
-        return db.scalar(select(func.count()).select_from(Ticket))
+def test_phone_numbers_are_e164_and_all_different():
+    phones = [phone_number(n) for n in range(PHONE_COUNT)]
+    assert all(re.fullmatch(E164_PATTERN, phone) for phone in phones)
+    assert len(set(phones)) == PHONE_COUNT
 
+
+# Saved to the database
+
+
+def test_add_fake_tickets_saves_customers_agents_and_messages(session_factory):
+    with session_factory() as db:
+        add_fake_tickets(db, 300, seed=1, now=NOW)
+        tickets = db.scalars(select(Ticket)).all()
+        customers = db.scalars(select(Customer)).all()
+
+        assert len(tickets) == 300
+        assert count_rows(db, Agent) == 12
+        assert count_rows(db, Message) > 300
+
+        # Some customers come back with a new problem.
+        tickets_per_customer = Counter(ticket.customer_id for ticket in tickets)
+        assert len(customers) < 300
+        assert max(tickets_per_customer.values()) > 1
+        # Every saved customer opened a ticket, and joined when they opened their first.
+        for customer in customers:
+            assert customer.created_at == min(t.created_at for t in customer.tickets)
+
+        # Only tickets someone has answered have an agent.
+        for ticket in tickets:
+            assert (ticket.agent_id is None) == (ticket.status == TicketStatus.open)
+
+
+def test_tickets_are_saved_in_batches_without_mixing_up_customers(session_factory, monkeypatch):
+    # Batches of 50 means 300 tickets take 6, so returning customers cross batches.
+    monkeypatch.setattr("scripts.seed.BATCH_SIZE", 50)
+    with session_factory() as db:
+        add_fake_tickets(db, 300, seed=1, now=NOW)
+        customers = db.scalars(select(Customer)).all()
+        for customer in customers:
+            assert customer.created_at == min(t.created_at for t in customer.tickets)
+        assert count_rows(db, Ticket) == 300
+
+
+def test_adding_more_keeps_the_agents_and_gives_new_customers_new_numbers(session_factory):
     with session_factory() as db:
         add_fake_tickets(db, 30, seed=1)
-        add_fake_tickets(db, 20, seed=2)
-        assert count(db) == 50
+        add_fake_tickets(db, 20, seed=1)  # The same seed would pick the same numbers.
+        assert count_rows(db, Ticket) == 50
+        assert count_rows(db, Agent) == 12
 
+
+def test_reset_clears_old_data(session_factory):
+    with session_factory() as db:
+        add_fake_tickets(db, 30, seed=1)
         add_fake_tickets(db, 10, seed=3, reset=True)
-        assert count(db) == 10
+        assert count_rows(db, Ticket) == 10
+        assert count_rows(db, Agent) == 12
 
 
 def test_seed_says_to_run_migrations_when_the_tables_are_missing(monkeypatch):

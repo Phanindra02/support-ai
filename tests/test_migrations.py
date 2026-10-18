@@ -6,10 +6,14 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from app.config import PROJECT_ROOT
 from app.database import Base
+
+# The migrations that change data, by revision id.
+CREATE_TICKETS = "086e8c9716c3"
+ADD_CUSTOMERS = "5a8da3b2d2f4"
 
 
 @pytest.fixture
@@ -47,3 +51,82 @@ def test_each_migration_can_be_undone_and_redone(empty_database, migrate, script
         migrate(empty_database, command.upgrade, revision)
         migrate(empty_database, command.downgrade, "-1")
         migrate(empty_database, command.upgrade, revision)
+
+
+def rows(engine, sql):
+    with engine.connect() as connection:
+        return [tuple(row) for row in connection.execute(text(sql))]
+
+
+def test_adding_customers_moves_existing_tickets_into_customers_and_messages(
+    empty_database, migrate
+):
+    migrate(empty_database, command.upgrade, CREATE_TICKETS)
+    with empty_database.begin() as connection:
+        # Tickets in the old shape. Jane wrote twice, with a different name the second time.
+        connection.execute(
+            text(
+                """
+                INSERT INTO tickets
+                    (customer_name, phone, subject, message, status, priority, created_at)
+                VALUES
+                    ('Jane D.', '+16145550123', 'Refund', 'Any news?', 'open', 'high',
+                     '2026-10-05 09:00+00'),
+                    ('Jane Doe', '+16145550123', 'Order late', 'Where is it?', 'closed', 'low',
+                     '2026-10-01 09:00+00'),
+                    ('Ravi Kumar', '+447911123456', 'Login', 'I can''t log in.', 'pending',
+                     'medium', '2026-10-03 09:00+00')
+                """
+            )
+        )
+
+    migrate(empty_database, command.upgrade, ADD_CUSTOMERS)
+
+    # One customer per phone number, named as on their earliest ticket.
+    assert rows(empty_database, "SELECT name, phone FROM customers ORDER BY created_at") == [
+        ("Jane Doe", "+16145550123"),
+        ("Ravi Kumar", "+447911123456"),
+    ]
+    tickets = """
+        SELECT tickets.subject, customers.phone, tickets.status::text
+        FROM tickets JOIN customers ON customers.id = tickets.customer_id
+        ORDER BY tickets.id
+    """
+    assert rows(empty_database, tickets) == [
+        ("Refund", "+16145550123", "open"),
+        ("Order late", "+16145550123", "closed"),
+        ("Login", "+447911123456", "pending"),
+    ]
+    messages = "SELECT ticket_id, sender::text, body FROM messages ORDER BY ticket_id"
+    assert rows(empty_database, messages) == [
+        (1, "customer", "Any news?"),
+        (2, "customer", "Where is it?"),
+        (3, "customer", "I can't log in."),
+    ]
+
+
+def test_removing_customers_puts_them_and_the_first_message_back_on_tickets(
+    empty_database, migrate
+):
+    migrate(empty_database, command.upgrade, ADD_CUSTOMERS)
+    with empty_database.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO customers (name, phone) VALUES ('Jane Doe', '+16145550123');
+                INSERT INTO tickets (customer_id, subject, status, priority)
+                    VALUES (1, 'Order late', 'open', 'medium'), (1, 'No messages', 'open', 'low');
+                INSERT INTO messages (ticket_id, sender, body, created_at) VALUES
+                    (1, 'agent', 'It ships today.', '2026-10-01 10:00+00'),
+                    (1, 'customer', 'Where is my order?', '2026-10-01 09:00+00');
+                """
+            )
+        )
+
+    migrate(empty_database, command.downgrade, CREATE_TICKETS)
+
+    old_shape = "SELECT customer_name, phone, subject, message FROM tickets ORDER BY id"
+    assert rows(empty_database, old_shape) == [
+        ("Jane Doe", "+16145550123", "Order late", "Where is my order?"),
+        ("Jane Doe", "+16145550123", "No messages", ""),
+    ]

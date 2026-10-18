@@ -45,6 +45,7 @@ uv run python -m scripts.weekly_report   # save a weekly report to reports/weekl
 | `GET` | `/tickets` | List tickets, newest first, with filters and pagination | 200 |
 | `POST` | `/tickets` | Open a ticket | 201 |
 | `GET` | `/tickets/{ticket_id}` | Get one ticket | 200 |
+| `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | 200 |
 | `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | 200 |
 
 ### A ticket
@@ -52,10 +53,9 @@ uv run python -m scripts.weekly_report   # save a weekly report to reports/weekl
 ```json
 {
   "id": 1,
-  "customer_name": "Jane Doe",
-  "phone": "+16145550123",
+  "customer": {"id": 1, "name": "Jane Doe", "phone": "+16145550123"},
+  "agent_id": null,
   "subject": "Order late",
-  "message": "Where is my order?",
   "status": "open",
   "priority": "medium",
   "created_at": "2026-10-18T21:35:49.123456Z",
@@ -63,6 +63,8 @@ uv run python -m scripts.weekly_report   # save a weekly report to reports/weekl
 }
 ```
 
+- `customer` is who opened the ticket. A phone number belongs to one customer.
+- `agent_id` is the agent handling the ticket, or `null` until someone picks it up.
 - `status` is `open`, `pending`, or `closed`. New tickets start `open`.
 - `priority` is `low`, `medium`, `high`, or `urgent`. New tickets start `medium`.
 - The server sets `created_at`. It sets `closed_at` when the ticket closes, and clears it if the ticket reopens.
@@ -76,7 +78,7 @@ curl -X POST http://127.0.0.1:8000/tickets \
   -d '{"customer_name": "Jane Doe", "phone": "+16145550123", "subject": "Order late", "message": "Where is my order?"}'
 ```
 
-Returns `201 Created` with the new ticket. All four fields are required:
+Returns `201 Created` with the new ticket. The server finds the customer by phone number, or adds them if the number is new. A returning customer keeps the name they gave first. The message becomes the first one in the ticket's conversation. All four fields are required:
 
 | Field | Rule |
 | --- | --- |
@@ -107,6 +109,21 @@ curl "http://127.0.0.1:8000/tickets?status=open&priority=urgent&skip=0&limit=20"
 ```bash
 curl http://127.0.0.1:8000/tickets/1
 ```
+
+### Get a ticket's messages
+
+```bash
+curl http://127.0.0.1:8000/tickets/1/messages
+```
+
+```json
+[
+  {"id": 1, "sender": "customer", "body": "Where is my order?", "created_at": "2026-10-18T21:35:49.123456Z"},
+  {"id": 2, "sender": "agent", "body": "It ships today.", "created_at": "2026-10-18T22:10:02.402114Z"}
+]
+```
+
+`sender` is `customer`, `agent`, or `bot` (the WhatsApp bot, from Stage 6). A ticket that doesn't exist gets a 404.
 
 ### Update a ticket
 

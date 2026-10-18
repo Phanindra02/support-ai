@@ -49,7 +49,7 @@ Done when: the API runs on Postgres with versioned migrations, measured index sp
 
 - [x] Install PostgreSQL with Homebrew and start it as a background service. Then create a database and user, and point SQLAlchemy at it through `DATABASE_URL` in `.env`.
 - [x] Add Alembic so every schema change is a versioned migration, replacing `Base.metadata.create_all`.
-- [ ] Expand the schema into customers, agents, tickets, and messages (the back-and-forth on each ticket), linked with foreign keys.
+- [x] Expand the schema into customers, agents, tickets, and messages (the back-and-forth on each ticket), linked with foreign keys.
 - [ ] Seed 100,000 tickets and run `EXPLAIN ANALYZE` on the list query.
 - [ ] Add indexes on status, priority, and created time, measure again, and record the before and after numbers in `docs/results.md`.
 - [ ] Install Redis with Homebrew, start it as a background service, and cache a stats endpoint (open ticket counts) for 60 seconds.

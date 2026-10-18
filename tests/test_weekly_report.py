@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import func, select
 
-from app.models import Ticket, TicketStatus
+from app.models import Customer, Ticket, TicketStatus
 from scripts.seed import add_fake_tickets
 from scripts.weekly_report import COLUMNS, OPEN_COLUMNS, build_report, load_tickets, save_report
 
@@ -89,10 +89,8 @@ def test_load_tickets_reads_times_as_utc(engine, session_factory):
     with session_factory() as db:
         db.add(
             Ticket(
-                customer_name="Jane Doe",
-                phone="+16145550123",
+                customer=Customer(name="Jane Doe", phone="+16145550123"),
                 subject="Order late",
-                message="Where is my order?",
                 created_at=pd.Timestamp("2026-10-05 09:00", tz="UTC").to_pydatetime(),
             )
         )

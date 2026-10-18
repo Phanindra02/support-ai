@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.main import MAX_INT
-from app.models import Ticket
+from app.models import Customer, Message, MessageSender, Ticket
 
 TEXT_LIMITS = [("customer_name", 100), ("subject", 200), ("message", 5000)]
 TEXT_FIELDS = [field for field, _ in TEXT_LIMITS]
@@ -14,6 +14,17 @@ TEXT_FIELDS = [field for field, _ in TEXT_LIMITS]
 def error_types(response):
     """The Pydantic error types in a 422 response, like ["string_too_short"]."""
     return [error["type"] for error in response.json()["detail"]]
+
+
+def saved_value(client, ticket, field):
+    """Where a TicketCreate field is stored: on the customer, the ticket, or the first message."""
+    if field == "customer_name":
+        return ticket["customer"]["name"]
+    if field == "phone":
+        return ticket["customer"]["phone"]
+    if field == "message":
+        return client.get(f"/tickets/{ticket['id']}/messages").json()[0]["body"]
+    return ticket[field]
 
 
 def strict_json(text):
@@ -30,10 +41,11 @@ def strict_json(text):
 
 @pytest.mark.parametrize("field, limit", TEXT_LIMITS)
 def test_text_at_the_length_limits_is_accepted(client, ticket_data, field, limit):
-    for value in ["a", "a" * limit]:
-        response = client.post("/tickets", json={**ticket_data, field: value})
+    # A new phone number each time, because a returning customer keeps their first name.
+    for phone, value in [("+16145550101", "a"), ("+16145550102", "a" * limit)]:
+        response = client.post("/tickets", json={**ticket_data, "phone": phone, field: value})
         assert response.status_code == 201, response.text
-        assert response.json()[field] == value
+        assert saved_value(client, response.json(), field) == value
 
 
 @pytest.mark.parametrize("field, limit", TEXT_LIMITS)
@@ -55,7 +67,7 @@ def test_empty_or_blank_text_is_rejected(client, ticket_data, field, value):
 def test_spaces_are_trimmed_before_saving(client, ticket_data):
     response = client.post("/tickets", json={**ticket_data, "customer_name": "  Jane Doe  "})
     assert response.status_code == 201
-    assert response.json()["customer_name"] == "Jane Doe"
+    assert response.json()["customer"]["name"] == "Jane Doe"
 
 
 @pytest.mark.parametrize("field, limit", TEXT_LIMITS)
@@ -63,7 +75,7 @@ def test_length_is_checked_after_trimming(client, ticket_data, field, limit):
     padded = "  " + "a" * limit + "  "
     response = client.post("/tickets", json={**ticket_data, field: padded})
     assert response.status_code == 201
-    assert response.json()[field] == "a" * limit
+    assert saved_value(client, response.json(), field) == "a" * limit
 
 
 @pytest.mark.parametrize("field", TEXT_FIELDS)
@@ -95,7 +107,7 @@ def test_text_must_be_a_string(client, ticket_data):
 def test_valid_phone_numbers_are_accepted(client, ticket_data, phone):
     response = client.post("/tickets", json={**ticket_data, "phone": phone})
     assert response.status_code == 201, response.text
-    assert response.json()["phone"] == phone.strip()
+    assert response.json()["customer"]["phone"] == phone.strip()
 
 
 @pytest.mark.parametrize(
@@ -192,6 +204,7 @@ BAD_IDS = ["0", "-1", str(MAX_INT + 1), "99999999999999999999", "abc", "1.5"]
 @pytest.mark.parametrize("ticket_id", BAD_IDS)
 def test_get_rejects_ids_outside_the_valid_range(client, ticket_id):
     assert client.get(f"/tickets/{ticket_id}").status_code == 422
+    assert client.get(f"/tickets/{ticket_id}/messages").status_code == 422
 
 
 @pytest.mark.parametrize("ticket_id", BAD_IDS)
@@ -202,6 +215,7 @@ def test_update_rejects_ids_outside_the_valid_range(client, ticket_id):
 
 def test_largest_valid_id_gets_a_404_not_a_crash(client):
     assert client.get(f"/tickets/{MAX_INT}").status_code == 404
+    assert client.get(f"/tickets/{MAX_INT}/messages").status_code == 404
     response = client.patch(f"/tickets/{MAX_INT}", json={"status": "closed"})
     assert response.status_code == 404
     assert response.json() == {"detail": "Ticket not found"}
@@ -270,21 +284,27 @@ def test_an_ordinary_422_keeps_fastapis_standard_shape(client, ticket_data):
 def test_a_stored_ticket_that_breaks_the_input_rules_can_still_be_read(client, session_factory):
     # Rows can come from places other than the API, like old data or a seed script.
     with session_factory() as db:
-        ticket = Ticket(customer_name="", phone="614-555-0123", subject="", message="")
+        ticket = Ticket(customer=Customer(name="", phone="614-555-0123"), subject="")
+        ticket.messages.append(Message(sender=MessageSender.customer, body=""))
         db.add(ticket)
         db.commit()
         ticket_id = ticket.id
 
     response = client.get(f"/tickets/{ticket_id}")
     assert response.status_code == 200
-    assert response.json()["phone"] == "614-555-0123"
+    assert response.json()["customer"]["phone"] == "614-555-0123"
     assert client.get("/tickets").status_code == 200
+    assert client.get(f"/tickets/{ticket_id}/messages").json()[0]["body"] == ""
 
 
 def test_docs_list_the_404_shape_for_single_ticket_endpoints(client):
     paths = client.get("/openapi.json").json()["paths"]
-    for method in ["get", "patch"]:
-        not_found = paths["/tickets/{ticket_id}"][method]["responses"]["404"]
+    for path, method in [
+        ("/tickets/{ticket_id}", "get"),
+        ("/tickets/{ticket_id}", "patch"),
+        ("/tickets/{ticket_id}/messages", "get"),
+    ]:
+        not_found = paths[path][method]["responses"]["404"]
         schema_ref = not_found["content"]["application/json"]["schema"]["$ref"]
         assert schema_ref == "#/components/schemas/ErrorResponse"
 

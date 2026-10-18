@@ -7,11 +7,12 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import Ticket, TicketPriority, TicketStatus
-from app.schemas import ErrorResponse, TicketCreate, TicketRead, TicketUpdate
+from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
+from app.schemas import ErrorResponse, MessageRead, TicketCreate, TicketRead, TicketUpdate
 
 
 # Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
@@ -39,6 +40,32 @@ def get_ticket_or_404(db: Session, ticket_id: int) -> Ticket:
     return ticket
 
 
+def find_customer(db: Session, phone: str) -> Customer | None:
+    return db.scalar(select(Customer).where(Customer.phone == phone))
+
+
+def get_or_create_customer(db: Session, name: str, phone: str) -> Customer:
+    """Find the customer with this phone number, or add them if they're new.
+
+    A returning customer keeps the name they gave first, even if they send a different one.
+    """
+    customer = find_customer(db, phone)
+    if customer is not None:
+        return customer
+
+    # Two requests from a new number can both miss the lookup above, and both try to add the
+    # customer. The unique constraint on phone rejects the second insert. The savepoint
+    # undoes just that insert, instead of failing the whole request with a 500, and the
+    # lookup then finds the customer the other request added.
+    try:
+        with db.begin_nested():
+            customer = Customer(name=name, phone=phone)
+            db.add(customer)
+    except IntegrityError:
+        customer = find_customer(db, phone)
+    return customer
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> Response:
     """Return FastAPI's standard 422, even for input that can't be repeated back.
@@ -64,7 +91,10 @@ def root():
 
 @app.post("/tickets", response_model=TicketRead, status_code=201)
 def create_ticket(ticket_in: TicketCreate, db: SessionDep):
-    ticket = Ticket(**ticket_in.model_dump())
+    customer = get_or_create_customer(db, ticket_in.customer_name, ticket_in.phone)
+    ticket = Ticket(customer=customer, subject=ticket_in.subject)
+    # The customer's message starts the ticket's conversation.
+    ticket.messages.append(Message(sender=MessageSender.customer, body=ticket_in.message))
     db.add(ticket)
     db.commit()
     db.refresh(ticket)
@@ -79,7 +109,9 @@ def list_tickets(
     skip: Annotated[int, Query(ge=0, le=MAX_INT)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    query = select(Ticket)
+    # selectinload fetches the customers for the whole page in one more query. Without it,
+    # reading each ticket's customer would run a query per ticket (the "N+1 queries" problem).
+    query = select(Ticket).options(selectinload(Ticket.customer))
     if status is not None:
         query = query.where(Ticket.status == status)
     if priority is not None:
@@ -93,6 +125,18 @@ def list_tickets(
 @app.get("/tickets/{ticket_id}", response_model=TicketRead, responses=NOT_FOUND)
 def get_ticket(ticket_id: TicketId, db: SessionDep):
     return get_ticket_or_404(db, ticket_id)
+
+
+@app.get("/tickets/{ticket_id}/messages", response_model=list[MessageRead], responses=NOT_FOUND)
+def list_messages(ticket_id: TicketId, db: SessionDep):
+    """The ticket's conversation, oldest message first."""
+    get_ticket_or_404(db, ticket_id)
+    query = (
+        select(Message)
+        .where(Message.ticket_id == ticket_id)
+        .order_by(Message.created_at, Message.id)
+    )
+    return db.scalars(query).all()
 
 
 @app.patch("/tickets/{ticket_id}", response_model=TicketRead, responses=NOT_FOUND)
