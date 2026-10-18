@@ -25,7 +25,7 @@ Done when: a tested ticket API runs locally on SQLite, and a Pandas script produ
 - [x] Define a ticket: id, customer name, phone, subject, message, status (open, pending, closed), priority (low, medium, high, urgent), created time, and closed time.
 - [x] Store tickets in SQLite through SQLAlchemy.
 - [x] Build endpoints to create a ticket, list tickets (with filters and pagination), get one ticket, and update status or priority.
-- [ ] Validate input with Pydantic schemas, and return proper errors (404 for a missing ticket, 422 for bad input). The developer may already have applied a tested version of this, so check `app/schemas.py` and `git status` first. The rules:
+- [x] Validate input with Pydantic schemas, and return proper errors (404 for a missing ticket, 422 for bad input). The developer may already have applied a tested version of this, so check `app/schemas.py` and `git status` first. The rules:
   - `customer_name` is 1–100 characters, `subject` is 1–200, and `message` is 1–5,000, all after trimming spaces (`str_strip_whitespace=True`).
   - `phone` matches E.164: `^\+[1-9][0-9]{1,14}$`. Use `[0-9]`, not `\d`, which also matches digits from other alphabets.
   - `TicketCreate` and `TicketUpdate` use `extra="forbid"`.

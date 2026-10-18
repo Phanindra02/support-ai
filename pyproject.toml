@@ -13,3 +13,14 @@ dependencies = [
     "sqlalchemy>=2.1.1",
     "uvicorn>=0.54.0",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.14.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# The project isn't installed as a package, so this lets tests import app from the project root.
+pythonpath = ["."]
+testpaths = ["tests"]
