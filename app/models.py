@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -64,6 +64,12 @@ class Agent(Base):
 
 class Ticket(Base):
     __tablename__ = "tickets"
+    __table_args__ = (
+        # In the same order the list sorts by (created_at, then id), so Postgres can read the
+        # newest tickets straight from the index instead of sorting the whole table. Reading
+        # the index backward gives newest first, so it doesn't need to be a DESC index.
+        Index("ix_tickets_created_at_id", "created_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # Postgres doesn't index foreign keys by itself. These indexes make "this customer's
@@ -72,9 +78,10 @@ class Ticket(Base):
     # The agent handling the ticket. Empty until someone picks it up.
     agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), index=True)
     subject: Mapped[str] = mapped_column(String(200))
-    # validate_strings=True makes SQLAlchemy reject anything not on the list.
+    # validate_strings=True makes SQLAlchemy reject anything not on the list. The status index
+    # serves the stats counts. Priority has none: measured, the planner never used one.
     status: Mapped[TicketStatus] = mapped_column(
-        Enum(TicketStatus, validate_strings=True), default=TicketStatus.open
+        Enum(TicketStatus, validate_strings=True), default=TicketStatus.open, index=True
     )
     priority: Mapped[TicketPriority] = mapped_column(
         Enum(TicketPriority, validate_strings=True), default=TicketPriority.medium

@@ -1,6 +1,7 @@
 """The EXPLAIN ANALYZE script times the same query GET /tickets runs."""
 
 import pytest
+from sqlalchemy import inspect, text
 
 from scripts.explain_list import CASES, explain, scans
 
@@ -33,3 +34,40 @@ def test_scans_lists_each_way_a_table_is_read_once():
         "Parallel Seq Scan on tickets; "
         "Bitmap Index Scan on ix_tickets_status"
     )
+
+
+def test_tickets_have_the_indexes_the_queries_need(engine):
+    indexes = {ix["name"]: ix["column_names"] for ix in inspect(engine).get_indexes("tickets")}
+    # The list's sort order, so the newest tickets can be read without sorting.
+    assert indexes["ix_tickets_created_at_id"] == ["created_at", "id"]
+    # For the stats counts by status.
+    assert indexes["ix_tickets_status"] == ["status"]
+
+
+@pytest.fixture
+def many_tickets(engine, make_ticket):
+    """5,000 tickets, enough that reading the whole table costs more than using an index."""
+    customer_id = make_ticket()["customer"]["id"]
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO tickets (customer_id, subject, status, priority, created_at)
+                SELECT :customer_id, 'Order late', 'closed', 'low', now() - g * interval '1 minute'
+                FROM generate_series(1, 5000) AS g
+                """
+            ),
+            {"customer_id": customer_id},
+        )
+        # Refresh the table statistics the planner uses to choose a plan.
+        connection.execute(text("ANALYZE tickets"))
+
+
+@pytest.mark.parametrize("name", ["first page, no filters", "status=closed"])
+def test_the_list_reads_the_newest_tickets_from_the_index_without_sorting(
+    engine, many_tickets, name
+):
+    with engine.connect() as connection:
+        _, plan = explain(connection, CASES[name])
+    assert "Index Scan Backward using ix_tickets_created_at_id" in plan
+    assert "Sort" not in plan
