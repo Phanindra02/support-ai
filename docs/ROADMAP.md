@@ -35,7 +35,7 @@ Done when: a tested ticket API runs locally on SQLite, and a Pandas script produ
   - An `ErrorResponse` model (`detail: str`) is listed as the 404 response on the get-one and update endpoints, and the schemas carry `json_schema_extra` examples for `/docs`.
 - [x] Write pytest tests for every endpoint using FastAPI's TestClient. Override `get_db` with a fresh test database, and never touch `support.db`. Cover the validation rules above, including boundary cases.
 - [x] Write a seed script that uses Faker to create about 1,000 realistic fake tickets. Spread `created_at` over the last 12 weeks, and close most older tickets with realistic `closed_at` times, so the weekly report has real numbers.
-- [ ] Write a Pandas script that reports weekly ticket volume, average time to close, and open tickets by priority, saved as a CSV.
+- [x] Write a Pandas script that reports weekly ticket volume, average time to close, and open tickets by priority, saved as a CSV.
 
 ### System design
 

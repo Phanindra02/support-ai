@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "faker>=40.43.0",
     "httpx2>=2.14.0",
+    "pandas>=3.0.6",
     "pytest>=9.1.1",
 ]
 

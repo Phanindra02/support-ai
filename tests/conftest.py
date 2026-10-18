@@ -9,7 +9,7 @@ from app.main import app
 
 
 @pytest.fixture
-def session_factory():
+def engine():
     """A fresh, empty in-memory database for each test, so tests never touch support.db."""
     # An in-memory SQLite database lives only as long as its connection. StaticPool keeps a
     # single connection open, so every session in the test sees the same tables and rows.
@@ -17,8 +17,14 @@ def session_factory():
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     Base.metadata.create_all(engine)
-    yield sessionmaker(bind=engine)
+    yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def session_factory(engine):
+    """Opens sessions on the test database."""
+    return sessionmaker(bind=engine)
 
 
 @pytest.fixture
