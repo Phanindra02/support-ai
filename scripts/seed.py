@@ -74,7 +74,7 @@ TOPICS = [
         "email is {email}.",
     ),
     (
-        "{product} arrived damaged",
+        "My {product} arrived damaged",
         "The box was crushed and the {product} inside is broken. I'd like a replacement.",
     ),
     (
