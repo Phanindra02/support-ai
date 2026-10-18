@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -66,6 +66,25 @@ def get_or_create_customer(db: Session, name: str, phone: str) -> Customer:
     return customer
 
 
+def ticket_list_query(
+    status: TicketStatus | None = None,
+    priority: TicketPriority | None = None,
+    skip: int = 0,
+    limit: int = 20,
+) -> Select[tuple[Ticket]]:
+    """The query behind GET /tickets. scripts/explain_list.py times this exact query."""
+    # selectinload fetches the customers for the whole page in one more query. Without it,
+    # reading each ticket's customer would run a query per ticket (the "N+1 queries" problem).
+    query = select(Ticket).options(selectinload(Ticket.customer))
+    if status is not None:
+        query = query.where(Ticket.status == status)
+    if priority is not None:
+        query = query.where(Ticket.priority == priority)
+    # Newest first. The id breaks ties between tickets created at the same moment.
+    query = query.order_by(Ticket.created_at.desc(), Ticket.id.desc())
+    return query.offset(skip).limit(limit)
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> Response:
     """Return FastAPI's standard 422, even for input that can't be repeated back.
@@ -109,17 +128,7 @@ def list_tickets(
     skip: Annotated[int, Query(ge=0, le=MAX_INT)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    # selectinload fetches the customers for the whole page in one more query. Without it,
-    # reading each ticket's customer would run a query per ticket (the "N+1 queries" problem).
-    query = select(Ticket).options(selectinload(Ticket.customer))
-    if status is not None:
-        query = query.where(Ticket.status == status)
-    if priority is not None:
-        query = query.where(Ticket.priority == priority)
-    # Newest first. The id breaks ties between tickets created in the same second.
-    query = query.order_by(Ticket.created_at.desc(), Ticket.id.desc())
-    query = query.offset(skip).limit(limit)
-    return db.scalars(query).all()
+    return db.scalars(ticket_list_query(status, priority, skip, limit)).all()
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketRead, responses=NOT_FOUND)

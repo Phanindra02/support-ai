@@ -36,6 +36,7 @@ Other commands:
 uv run pytest                            # run the tests on support_test, never the app's database
 uv run python -m scripts.seed            # add 1,000 realistic fake tickets
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
+uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANALYZE (seed 100,000 first)
 ```
 
 ## API
