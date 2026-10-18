@@ -1,0 +1,10 @@
+Database migrations. Every schema change is a script in versions/, applied in order.
+
+    uv run alembic upgrade head                              # apply every migration not yet applied
+    uv run alembic revision --autogenerate -m "Add agents"   # write a migration from model changes
+    uv run alembic downgrade -1                              # undo the last migration
+    uv run alembic current                                   # show which migration the database is on
+    uv run alembic upgrade head --sql                        # print the SQL without running it
+
+Autogenerate is a first draft. Read every generated script before applying it: it can't detect
+renames (it sees a drop and an add), and it doesn't drop Postgres enum types on downgrade.

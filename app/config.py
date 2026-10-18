@@ -21,5 +21,8 @@ class Settings(BaseSettings):
     # instead of quietly connecting to the wrong database.
     database_url: str
 
+    # Only the tests use this. They empty this database, so it must never be the real one.
+    test_database_url: str | None = None
+
 
 settings = Settings()

@@ -5,11 +5,11 @@ from datetime import datetime, timedelta, timezone
 from statistics import median
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
 
 from app.models import Ticket, TicketPriority, TicketStatus
 from app.schemas import E164_PATTERN
-from scripts.seed import WEEKS, add_fake_tickets, make_tickets
+from scripts.seed import WEEKS, add_fake_tickets, main, make_tickets
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
 
@@ -95,3 +95,10 @@ def test_add_fake_tickets_saves_them_and_reset_clears_old_ones(session_factory):
 
         add_fake_tickets(db, 10, seed=3, reset=True)
         assert count(db) == 10
+
+
+def test_seed_says_to_run_migrations_when_the_tables_are_missing(monkeypatch):
+    monkeypatch.setattr("scripts.seed.engine", create_engine("sqlite://"))
+    monkeypatch.setattr("sys.argv", ["seed"])
+    with pytest.raises(SystemExit, match="alembic upgrade head"):
+        main()

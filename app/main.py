@@ -1,5 +1,4 @@
 import json
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -10,20 +9,13 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database import Base, engine, get_db
+from app.database import get_db
 from app.models import Ticket, TicketPriority, TicketStatus
 from app.schemas import ErrorResponse, TicketCreate, TicketRead, TicketUpdate
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Create any missing tables when the server starts, not when this file is imported, so
-    # tests can import the app without touching support.db. Stage 2 replaces this with Alembic.
-    Base.metadata.create_all(engine)
-    yield
-
-
-app = FastAPI(title="Support AI", lifespan=lifespan)
+# Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
+app = FastAPI(title="Support AI")
 
 # Shortcut: any endpoint with a `db: SessionDep` parameter gets its own database session.
 SessionDep = Annotated[Session, Depends(get_db)]

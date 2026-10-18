@@ -11,13 +11,14 @@ Run it from the project root:
 import argparse
 import math
 import random
+import sys
 from datetime import datetime, timedelta, timezone
 
 from faker import Faker
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.orm import Session
 
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal, engine
 from app.models import Ticket, TicketPriority, TicketStatus
 from app.schemas import TicketCreate
 
@@ -178,8 +179,8 @@ def main() -> None:
     if args.count < 1:
         parser.error("--count must be at least 1")
 
-    # The API creates tables when it starts, but it may not have run yet.
-    Base.metadata.create_all(engine)
+    if not inspect(engine).has_table(Ticket.__tablename__):
+        sys.exit("The tables don't exist yet. Create them with: uv run alembic upgrade head")
     with SessionLocal() as db:
         add_fake_tickets(db, args.count, args.seed, args.reset)
         total = db.scalar(select(func.count()).select_from(Ticket))

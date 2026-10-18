@@ -14,22 +14,26 @@ echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc   # t
 brew services start postgresql@16        # runs in the background, and starts again at login
 createuser --pwprompt support            # asks you for a password
 createdb --owner support support
+createdb --owner support support_test    # the tests' own database, which they empty
 ```
 
-Copy `.env.example` to `.env`, and put that password in `DATABASE_URL`. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
+Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST_DATABASE_URL`. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
 
 ```bash
 cp .env.example .env
 uv sync
+uv run alembic upgrade head              # create the tables
 uv run uvicorn app.main:app --reload
 ```
 
 Then open http://127.0.0.1:8000/docs to try the API.
 
+Every schema change is an Alembic migration in `alembic/versions/`. After pulling new code, run `uv run alembic upgrade head` again. See [alembic/README](alembic/README) for the other migration commands.
+
 Other commands:
 
 ```bash
-uv run pytest                            # run the tests (they use their own in-memory database)
+uv run pytest                            # run the tests (they never touch the app's database)
 uv run python -m scripts.seed            # add 1,000 realistic fake tickets
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
 ```
@@ -150,6 +154,7 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 ## Project layout
 
 - `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, and `database.py` the database connection.
+- `alembic/`: database migrations.
 - `scripts/`: the seed script and the weekly report.
 - `tests/`: pytest tests.
 - `docs/`: the roadmap, stage summaries, and [system design notes](docs/system-design/).

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import MetaData, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
@@ -21,6 +21,19 @@ SessionLocal = sessionmaker(bind=engine)
 
 class Base(DeclarativeBase):
     """Every table model inherits from this."""
+
+    # Give constraints and indexes predictable names, like fk_tickets_customer_id_customers.
+    # A later migration has to name a constraint to drop or change it, and without these
+    # rules Postgres would make up the names itself.
+    metadata = MetaData(
+        naming_convention={
+            "ix": "ix_%(column_0_label)s",
+            "uq": "uq_%(table_name)s_%(column_0_name)s",
+            "ck": "ck_%(table_name)s_%(constraint_name)s",
+            "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+            "pk": "pk_%(table_name)s",
+        }
+    )
 
 
 def get_db():

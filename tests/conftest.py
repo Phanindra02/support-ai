@@ -1,11 +1,23 @@
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
+
+
+@pytest.fixture(scope="session")
+def test_database_url():
+    """The Postgres database the tests may empty. It can never be the app's real database."""
+    url = settings.test_database_url
+    if url is None:
+        pytest.fail("Set TEST_DATABASE_URL in .env. See .env.example.", pytrace=False)
+    if not make_url(url).database.endswith("_test") or url == settings.database_url:
+        pytest.fail("TEST_DATABASE_URL must name a database ending in _test.", pytrace=False)
+    return url
 
 
 @pytest.fixture
@@ -36,7 +48,6 @@ def client(session_factory):
             yield db
 
     app.dependency_overrides[get_db] = get_test_db
-    # Not opened with `with`, so the app's startup code, which creates support.db, never runs.
     yield TestClient(app)
     app.dependency_overrides.clear()
 
