@@ -89,6 +89,36 @@ Limits are keyed by something that identifies the client: the IP address, a user
 - **`Retry-After`** says how many seconds to wait. Well-behaved clients wait that long before retrying.
 - **Allowance headers** let clients see how much is left before they hit the limit. GitHub sends `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`, and an IETF draft is standardizing `RateLimit` headers for the same purpose.
 
+## What this project uses, and why
+
+### The stats cache: cache-aside, cleared on every ticket change, with a 60-second expiry
+
+`GET /stats` looks for the key `stats:tickets` in Redis. On a miss, it counts tickets in Postgres and saves the result for 60 seconds. Creating or updating a ticket deletes the key after the database commit, and so does the seed script. The code is in `app/main.py` and `app/cache.py`.
+
+- **Why cache-aside.** The counts are worked out only when someone asks, so nothing is computed while nobody's watching a dashboard. If Redis goes down, the endpoint counts in Postgres instead of failing.
+- **Why not write-through.** Every ticket change would have to recount all tickets as part of the write, whether or not anyone reads the counts, which slows down the path that matters most. Keeping running totals with `INCR` instead would make a second copy of the truth, and it would drift as soon as a change skipped the API, like the seed script or a manual fix in SQL. Deleting and recounting can't drift.
+- **Why delete on write and also expire.** Deleting makes the counts current right after a change. The 60-second expiry is the safety net: it limits how long the counts can stay wrong if a delete fails while Redis is briefly unreachable, if a change skips the API, or if the race described above happens.
+- **Why Redis instead of a Python dictionary.** Several uvicorn workers, and in Stage 8 several pods, must all see the same cache and the same deletes.
+- **What it bought.** A hit takes about 1 ms and a miss about 6 ms (see [results](../results.md)). The bigger win is load: however many dashboards poll, Postgres counts at most once a minute, plus once after each change.
+
+### The rate limit: a sliding window log, 60 requests a minute per IP, failing open
+
+Each IP has a sorted set of its request times. A request drops entries older than 60 seconds, adds itself, and counts, all in one `MULTI`/`EXEC` transaction. Over 60, it takes itself back out and gets a 429 with `Retry-After`. The code is in `app/rate_limit.py`.
+
+- **Why a sliding window log.** The promise is simple: 60 requests in any 60 seconds, with no loophole at the minute boundary. The log keeps that promise exactly. Its weakness is memory, one entry per request, but at a limit of 60 that's at most 60 small entries per IP.
+- **Why not a fixed window.** It allows 120 requests in two seconds around the turn of each minute.
+- **Why not a token bucket.** A token bucket deliberately allows bursts, and updating it atomically needs a Lua script. It would be the better choice to let a client make 10 quick requests at once, as a page load might, while capping the average. That's not the promise here.
+- **Why not a sliding window counter.** It saves memory by estimating, which only matters at much higher limits.
+- **Why rejected requests don't count.** A client that's over the limit and waits for `Retry-After` gets its full allowance back. If rejected requests counted, a client retrying too fast would stay blocked forever.
+- **Why fail open.** Without Redis, requests go through unlimited, and a warning is logged. For a support API, staying up matters more than the limit during a short Redis outage. Stage 3's login endpoint is a case for failing closed instead, because that's where password-guessing attacks go.
+- **Why by IP.** There are no logins yet. Stage 3 adds agent logins, which allow a limit per agent.
+
+### What to change in later stages
+
+- **Behind a proxy (Stage 5),** every request seems to come from Caddy's address, so every user would share one limit. uvicorn must run with `--proxy-headers` and `--forwarded-allow-ips` set to the proxy's address, so the real client IP comes from `X-Forwarded-For`, trusted only when the proxy sent it.
+- **The Twilio webhook (Stage 3)** receives every customer's WhatsApp messages from Twilio's own servers, so a per-IP limit would throttle all customers together. That endpoint should skip the IP limit, or limit by the customer's phone number instead.
+- **One Redis does two jobs.** Losing a cache entry costs one recount, but losing a rate-limit log resets that IP's limit. A production Redis should set `maxmemory` with `volatile-lru`, which only evicts keys that have an expiry. Every key here has one, so this works, but a larger system might give the rate limiter its own Redis.
+
 ## Interview questions
 
 - When is a cache the wrong answer?
