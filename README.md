@@ -205,6 +205,6 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 - `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
 - `alembic/`: database migrations.
-- `scripts/`: the seed script and the weekly report.
+- `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
 - `tests/`: pytest tests.
-- `docs/`: the roadmap, stage summaries, and [system design notes](docs/system-design/).
+- `docs/`: the roadmap, stage summaries, [measured results](docs/results.md), and [system design notes](docs/system-design/).
