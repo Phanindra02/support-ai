@@ -3,10 +3,7 @@
 import logging
 import time
 
-import pytest
-
-from app.cache import get_redis, make_redis
-from app.main import STATS_CACHE_SECONDS, STATS_KEY, app
+from app.main import STATS_CACHE_SECONDS, STATS_KEY
 from app.models import Customer, Ticket, TicketPriority, TicketStatus
 from scripts.seed import main
 
@@ -80,15 +77,6 @@ def test_when_the_cached_stats_expire_they_are_counted_again(client, session_fac
     response = client.get("/stats")
     assert response.headers["X-Cache"] == "MISS"
     assert response.json()["by_status"]["open"] == 1
-
-
-@pytest.fixture
-def redis_is_down(client):
-    """Point the app at a Redis that isn't running. Nothing listens on port 1."""
-    stopped = make_redis("redis://localhost:1/0")
-    app.dependency_overrides[get_redis] = lambda: stopped
-    yield
-    stopped.close()
 
 
 def test_stats_still_work_when_redis_is_down(client, session_factory, redis_is_down, caplog):

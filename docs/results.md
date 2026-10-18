@@ -88,3 +88,9 @@ A hit was **6 to 8.5 times faster** at the median.
 The latency gain is real but small, because Postgres counts 100,000 rows in a few milliseconds with the status index. The bigger win is load. If 100 agents' dashboards each refreshed every 10 seconds, that would be 10 requests a second. Without the cache, Postgres would run 20 count queries a second. With it, Postgres runs 2 queries a minute (or whenever a ticket changes, from the next step on), however many agents are watching.
 
 **Redis down.** With redis-py's default settings, every command against a stopped Redis retried with growing waits and took 2.7 seconds. The cache client turns retries off and times out after 0.5 seconds, so with Redis down a request skips the cache and is answered from Postgres. A test checks that it takes under half a second.
+
+## Rate limit (Stage 2)
+
+**Behavior.** Against the running API with the default limit of 60, 61 requests from one IP in a few seconds returned 60 `200`s and one `429` with `Retry-After: 60`. The IP's log in Redis then held exactly 60 entries, because the rejected request removed its own entry.
+
+**Cost per request.** Every request now runs one Redis transaction before the endpoint does anything. With the limiter on (`RATE_LIMIT_PER_MINUTE=100000`, so nothing is rejected), `scripts/measure_cache.py` measured cache hits at 0.86 to 0.98 ms at the median over two runs, inside the 0.7 to 1.0 ms measured before the limiter existed. The limiter's cost is too small to see at this precision. Cache misses varied from 8 to 15 ms over the same two runs, which is noise on the machine rather than the limiter, since misses run the same limiter as hits.

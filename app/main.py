@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.cache import clear_cache, get_redis, read_cache, write_cache
 from app.database import get_db
+from app.rate_limit import rate_limit
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
 from app.schemas import (
     ErrorResponse,
@@ -25,7 +26,12 @@ from app.schemas import (
 
 
 # Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
-app = FastAPI(title="Support AI")
+app = FastAPI(
+    title="Support AI",
+    # Every endpoint checks the rate limit first. /docs isn't an endpoint, so it doesn't.
+    dependencies=[Depends(rate_limit)],
+    responses={429: {"model": ErrorResponse, "description": "Too many requests from this IP"}},
+)
 
 # Shortcut: any endpoint with a `db: SessionDep` parameter gets its own database session.
 SessionDep = Annotated[Session, Depends(get_db)]

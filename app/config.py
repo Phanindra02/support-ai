@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The project root, so .env is found no matter which folder a command runs from.
@@ -29,6 +30,9 @@ class Settings(BaseSettings):
 
     # Only the tests use this. They empty this Redis database, so it must differ from REDIS_URL.
     test_redis_url: str | None = None
+
+    # How many requests each IP address may make in any 60 seconds.
+    rate_limit_per_minute: int = Field(default=60, ge=1)
 
 
 settings = Settings()

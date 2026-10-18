@@ -127,6 +127,15 @@ def client(session_factory, redis_client):
 
 
 @pytest.fixture
+def redis_is_down(client):
+    """Point the app at a Redis that isn't running. Nothing listens on port 1."""
+    stopped = make_redis("redis://localhost:1/0")
+    app.dependency_overrides[get_redis] = lambda: stopped
+    yield
+    stopped.close()
+
+
+@pytest.fixture
 def ticket_data():
     """A valid body for POST /tickets. Tests copy it and change one field."""
     return {

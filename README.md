@@ -39,7 +39,7 @@ uv run pytest                            # run the tests on support_test, never 
 uv run python -m scripts.seed            # add 1,000 realistic fake tickets
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
 uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANALYZE (seed 100,000 first)
-uv run python -m scripts.measure_cache   # time GET /stats with and without the cache (API running)
+uv run python -m scripts.measure_cache   # time GET /stats with and without the cache (see the script)
 ```
 
 ## API
@@ -157,6 +157,16 @@ curl -i http://127.0.0.1:8000/stats
 
 The counts are cached in Redis for 60 seconds, and the cache is cleared whenever a ticket is created or updated, so they're always current. The `X-Cache` header says `HIT` if they came from the cache, or `MISS` if they were just counted in the database. If Redis is down, the API counts in the database every time instead of failing.
 
+### Rate limit
+
+Each IP address may make 60 requests in any 60 seconds, to every endpoint together. Request number 61 gets a `429 Too Many Requests`, with a `Retry-After` header saying how many seconds until one of the earlier requests is a minute old:
+
+```json
+{"detail": "Too many requests. Try again in 42 seconds."}
+```
+
+The window slides with each request instead of resetting on the minute, so sending 60 requests just before a minute ends and 60 more just after doesn't work. Requests that get a 429 don't count toward the limit. Set `RATE_LIMIT_PER_MINUTE` to change the limit. If Redis is down, requests aren't limited.
+
 ### Status codes
 
 | Code | When |
@@ -165,6 +175,7 @@ The counts are cached in Redis for 60 seconds, and the cache is cleared whenever
 | 201 Created | A new ticket was opened |
 | 404 Not Found | No ticket has that id |
 | 422 Unprocessable Content | The input breaks a rule: a missing, unknown, or invalid field, or an id, `skip`, or `limit` out of range |
+| 429 Too Many Requests | This IP made more than 60 requests in the last 60 seconds |
 
 A 404 returns:
 
@@ -192,7 +203,7 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 ## Project layout
 
-- `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, and `config.py` the settings.
+- `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
 - `alembic/`: database migrations.
 - `scripts/`: the seed script and the weekly report.
 - `tests/`: pytest tests.

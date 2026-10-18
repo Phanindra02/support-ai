@@ -54,7 +54,7 @@ Done when: the API runs on Postgres with versioned migrations, measured index sp
 - [x] Add indexes on status, priority, and created time, measure again, and record the before and after numbers in `docs/results.md`. Priority was measured and left out: the planner never used it (see `docs/results.md`).
 - [x] Install Redis with Homebrew, start it as a background service, and cache a stats endpoint (open ticket counts) for 60 seconds.
 - [x] Clear the cache whenever a ticket changes.
-- [ ] Add rate limiting with Redis, such as 60 requests per minute per IP.
+- [x] Add rate limiting with Redis, such as 60 requests per minute per IP.
 - [x] Point the tests at a separate test database.
 
 ### System design

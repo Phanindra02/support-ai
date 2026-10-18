@@ -1,8 +1,9 @@
 """Measure how much the Redis cache speeds up GET /stats.
 
-Start the API in another terminal first, then run this from the project root:
+Start the API in another terminal first, with the rate limit raised so it doesn't stop these
+400 requests, then run this from the project root:
 
-    uv run uvicorn app.main:app
+    RATE_LIMIT_PER_MINUTE=100000 uv run uvicorn app.main:app
     uv run python -m scripts.measure_cache                              # http://127.0.0.1:8000
     uv run python -m scripts.measure_cache --url http://127.0.0.1:9000
 
@@ -34,6 +35,8 @@ def time_stats(client: httpx.Client, redis: Redis, expected: str) -> list[float]
         start = time.perf_counter()
         response = client.get("/stats")
         times.append((time.perf_counter() - start) * 1000)
+        if response.status_code == 429:
+            raise SystemExit("Rate limited. Start the API with RATE_LIMIT_PER_MINUTE=100000.")
         response.raise_for_status()
         if response.headers["X-Cache"] != expected:
             raise SystemExit(f"Expected a cache {expected}, got {response.headers['X-Cache']}.")
