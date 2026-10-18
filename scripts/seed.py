@@ -18,7 +18,9 @@ from faker import Faker
 from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.orm import Session
 
+from app.cache import clear_cache, redis_client
 from app.database import SessionLocal, engine
+from app.main import STATS_KEY
 from app.models import (
     Agent,
     Customer,
@@ -347,6 +349,8 @@ def main() -> None:
     with SessionLocal() as db:
         add_fake_tickets(db, args.count, args.seed, args.reset)
         tickets, customers = count_rows(db, Ticket), count_rows(db, Customer)
+    # The cached ticket counts are out of date now.
+    clear_cache(redis_client, STATS_KEY)
     print(
         f"Added {args.count:,} tickets. "
         f"The database now has {tickets:,} tickets from {customers:,} customers."

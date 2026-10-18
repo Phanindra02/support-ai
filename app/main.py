@@ -11,7 +11,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.cache import get_redis, read_cache, write_cache
+from app.cache import clear_cache, get_redis, read_cache, write_cache
 from app.database import get_db
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
 from app.schemas import (
@@ -31,7 +31,8 @@ app = FastAPI(title="Support AI")
 SessionDep = Annotated[Session, Depends(get_db)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 
-# Where the stats are cached in Redis, and for how long.
+# Where the stats are cached in Redis, and for how long. Any change to a ticket also clears
+# them, so the 60 seconds only matters if a clear fails or a change skips the API.
 STATS_KEY = "stats:tickets"
 STATS_CACHE_SECONDS = 60
 
@@ -140,13 +141,16 @@ def root():
 
 
 @app.post("/tickets", response_model=TicketRead, status_code=201)
-def create_ticket(ticket_in: TicketCreate, db: SessionDep):
+def create_ticket(ticket_in: TicketCreate, db: SessionDep, redis: RedisDep):
     customer = get_or_create_customer(db, ticket_in.customer_name, ticket_in.phone)
     ticket = Ticket(customer=customer, subject=ticket_in.subject)
     # The customer's message starts the ticket's conversation.
     ticket.messages.append(Message(sender=MessageSender.customer, body=ticket_in.message))
     db.add(ticket)
     db.commit()
+    # After the commit, not before. Clearing first would let another request cache the old
+    # counts again in the moment before the new ticket is saved.
+    clear_cache(redis, STATS_KEY)
     db.refresh(ticket)
     return ticket
 
@@ -200,7 +204,7 @@ def list_messages(ticket_id: TicketId, db: SessionDep):
 
 
 @app.patch("/tickets/{ticket_id}", response_model=TicketRead, responses=NOT_FOUND)
-def update_ticket(ticket_id: TicketId, ticket_in: TicketUpdate, db: SessionDep):
+def update_ticket(ticket_id: TicketId, ticket_in: TicketUpdate, db: SessionDep, redis: RedisDep):
     ticket = get_ticket_or_404(db, ticket_id)
     # Keep only the fields that were sent. Missing or null fields stay as they are.
     changes = ticket_in.model_dump(exclude_none=True)
@@ -215,5 +219,6 @@ def update_ticket(ticket_id: TicketId, ticket_in: TicketUpdate, db: SessionDep):
     for field, value in changes.items():
         setattr(ticket, field, value)
     db.commit()
+    clear_cache(redis, STATS_KEY)  # The counts by status and priority may have changed.
     db.refresh(ticket)
     return ticket

@@ -8,6 +8,7 @@ import pytest
 from app.cache import get_redis, make_redis
 from app.main import STATS_CACHE_SECONDS, STATS_KEY, app
 from app.models import Customer, Ticket, TicketPriority, TicketStatus
+from scripts.seed import main
 
 ZERO_STATS = {
     "by_status": {"open": 0, "pending": 0, "closed": 0},
@@ -103,3 +104,60 @@ def test_stats_still_work_when_redis_is_down(client, session_factory, redis_is_d
     assert response.headers["X-Cache"] == "MISS"
     assert response.json()["by_status"]["open"] == 1
     assert "Redis failed" in caplog.text
+
+
+# Clearing the cache when tickets change
+
+
+def test_creating_a_ticket_clears_the_cached_stats(client, make_ticket):
+    client.get("/stats")
+    make_ticket()
+    response = client.get("/stats")
+    assert response.headers["X-Cache"] == "MISS"
+    assert response.json()["by_status"]["open"] == 1
+
+
+def test_updating_a_ticket_clears_the_cached_stats(client, make_ticket):
+    ticket = make_ticket()
+    client.get("/stats")
+    client.patch(f"/tickets/{ticket['id']}", json={"status": "closed"})
+    response = client.get("/stats")
+    assert response.headers["X-Cache"] == "MISS"
+    assert response.json()["by_status"] == {"open": 0, "pending": 0, "closed": 1}
+
+
+def test_reading_tickets_keeps_the_cached_stats(client, make_ticket):
+    ticket = make_ticket()
+    client.get("/stats")
+    client.get("/tickets")
+    client.get(f"/tickets/{ticket['id']}")
+    client.get(f"/tickets/{ticket['id']}/messages")
+    assert client.get("/stats").headers["X-Cache"] == "HIT"
+
+
+def test_a_failed_change_keeps_the_cached_stats(client, make_ticket):
+    ticket = make_ticket()
+    client.get("/stats")
+    assert client.patch("/tickets/999", json={"status": "closed"}).status_code == 404
+    assert client.patch(f"/tickets/{ticket['id']}", json={}).status_code == 422
+    assert client.post("/tickets", json={}).status_code == 422
+    assert client.get("/stats").headers["X-Cache"] == "HIT"
+
+
+def test_tickets_can_still_change_when_redis_is_down(client, ticket_data, redis_is_down):
+    response = client.post("/tickets", json=ticket_data)
+    assert response.status_code == 201
+    update = client.patch(f"/tickets/{response.json()['id']}", json={"status": "closed"})
+    assert update.status_code == 200
+
+
+def test_seeding_clears_the_cached_stats(engine, session_factory, redis_client, monkeypatch):
+    redis_client.set(STATS_KEY, "old counts")
+    monkeypatch.setattr("scripts.seed.engine", engine)
+    monkeypatch.setattr("scripts.seed.SessionLocal", session_factory)
+    monkeypatch.setattr("scripts.seed.redis_client", redis_client)
+    monkeypatch.setattr("sys.argv", ["seed", "--count", "5"])
+
+    main()
+
+    assert redis_client.get(STATS_KEY) is None

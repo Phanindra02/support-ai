@@ -47,6 +47,15 @@ def read_cache(redis: Redis, key: str) -> str | None:
         return None
 
 
+def clear_cache(redis: Redis, key: str) -> None:
+    """Delete a cached value, so the next read works it out again from the database."""
+    try:
+        redis.delete(key)
+    except RedisError as error:
+        # The value goes stale, but only until it expires by itself.
+        logger.warning("Skipped clearing the cache, because Redis failed: %s", error)
+
+
 def write_cache(redis: Redis, key: str, value: str, seconds: int) -> None:
     """Cache a value. Redis deletes it by itself after `seconds`."""
     try:

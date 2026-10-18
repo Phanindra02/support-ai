@@ -155,7 +155,7 @@ curl -i http://127.0.0.1:8000/stats
 
 `by_status` counts every ticket. `backlog_by_priority` counts the tickets not closed yet (open or pending), which is the work still waiting.
 
-The counts are cached in Redis for 60 seconds. The `X-Cache` header says `HIT` if they came from the cache, or `MISS` if they were just counted in the database. If Redis is down, the API counts in the database every time instead of failing.
+The counts are cached in Redis for 60 seconds, and the cache is cleared whenever a ticket is created or updated, so they're always current. The `X-Cache` header says `HIT` if they came from the cache, or `MISS` if they were just counted in the database. If Redis is down, the API counts in the database every time instead of failing.
 
 ### Status codes
 
