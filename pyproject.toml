@@ -1,0 +1,15 @@
+[project]
+name = "support-ai"
+version = "0.1.0"
+description = "AI customer support platform: ticket API, WhatsApp bot, RAG, and ML triage"
+readme = "README.md"
+authors = [
+    { name = "Phanindra", email = "60551624+Phanindra02@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "pydantic>=2.13.5",
+    "sqlalchemy>=2.1.1",
+    "uvicorn>=0.54.0",
+]
