@@ -55,7 +55,7 @@ Done when: the API runs on Postgres with versioned migrations, measured index sp
 - [ ] Install Redis with Homebrew, start it as a background service, and cache a stats endpoint (open ticket counts) for 60 seconds.
 - [ ] Clear the cache whenever a ticket changes.
 - [ ] Add rate limiting with Redis, such as 60 requests per minute per IP.
-- [ ] Point the tests at a separate test database.
+- [x] Point the tests at a separate test database.
 
 ### System design
 

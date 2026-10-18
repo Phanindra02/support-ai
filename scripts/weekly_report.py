@@ -35,7 +35,8 @@ def load_tickets(engine: Engine) -> pd.DataFrame:
     with engine.connect() as connection:
         tickets = pd.read_sql(query, connection)
     tickets["priority"] = tickets["priority"].astype(str)
-    # SQLite returns times without a timezone. They're stored in UTC, so label them UTC.
+    # Make both columns UTC datetimes. closed_at is often empty, and utc=True turns that
+    # into NaT (pandas' "no time") while keeping the column a datetime type.
     for column in ["created_at", "closed_at"]:
         tickets[column] = pd.to_datetime(tickets[column], utc=True)
     return tickets

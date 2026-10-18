@@ -23,9 +23,10 @@ def add_ticket(session_factory, **fields):
 
 
 def parse_utc(text):
-    """Read a datetime from the API. SQLite drops the timezone, but every stored time is UTC."""
+    """Read a datetime from the API, and check that it's in UTC."""
     value = datetime.fromisoformat(text)
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    assert value.utcoffset() == timedelta(0), text
+    return value
 
 
 def ids(response):

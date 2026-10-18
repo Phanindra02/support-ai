@@ -33,7 +33,7 @@ Every schema change is an Alembic migration in `alembic/versions/`. After pullin
 Other commands:
 
 ```bash
-uv run pytest                            # run the tests (they never touch the app's database)
+uv run pytest                            # run the tests on support_test, never the app's database
 uv run python -m scripts.seed            # add 1,000 realistic fake tickets
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
 ```
