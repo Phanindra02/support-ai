@@ -100,7 +100,8 @@ def test_every_endpoint_counts_even_bad_requests(client, low_limit):
 def test_another_ip_is_not_limited(client, low_limit):
     for _ in range(LIMIT + 1):
         client.get("/tickets")
-    other_ip = TestClient(app, client=("198.51.100.4", 50000))
+    # The same agent's token, from another address.
+    other_ip = TestClient(app, client=("198.51.100.4", 50000), headers=client.headers)
     assert other_ip.get("/tickets").status_code == 200
 
 

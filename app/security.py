@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionDep
-from app.models import Agent
+from app.models import Agent, AgentRole
 from app.schemas import MAX_INT
 
 # HMAC with SHA-256: the same secret key signs and checks tokens. Only this API makes and
@@ -105,3 +105,14 @@ def get_current_agent(token: Annotated[str, Depends(oauth2_scheme)], db: Session
 
 
 CurrentAgent = Annotated[Agent, Depends(get_current_agent)]
+
+
+def get_current_admin(agent: CurrentAgent) -> Agent:
+    """The agent who sent this request, if they're an admin. Anyone else gets a 403."""
+    # 403, not 401: the request did prove who sent it, but they aren't allowed to do this.
+    if agent.role != AgentRole.admin:
+        raise HTTPException(status_code=403, detail="Only admins can do this")
+    return agent
+
+
+CurrentAdmin = Annotated[Agent, Depends(get_current_admin)]

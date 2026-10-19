@@ -25,7 +25,7 @@ Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST
 cp .env.example .env
 uv sync
 uv run alembic upgrade head              # create the tables
-uv run python -m scripts.create_agent --email you@example.com --name "Your Name"   # asks for a password
+uv run python -m scripts.create_agent --email you@example.com --name "Your Name" --admin   # asks for a password
 uv run uvicorn app.main:app --reload
 ```
 
@@ -37,7 +37,7 @@ Other commands:
 
 ```bash
 uv run pytest                            # run the tests on support_test, never the app's database
-uv run python -m scripts.seed            # add 1,000 realistic fake tickets
+uv run python -m scripts.seed            # add 1,000 realistic fake tickets (--reset deletes every agent too)
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
 uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANALYZE (seed 100,000 first)
 uv run python -m scripts.measure_cache   # time GET /stats with and without the cache (see the script)
@@ -45,16 +45,21 @@ uv run python -m scripts.measure_cache   # time GET /stats with and without the 
 
 ## API
 
-| Method | Path | What it does | Success |
-| --- | --- | --- | --- |
-| `POST` | `/auth/token` | Log in as an agent and get an access token | 200 |
-| `GET` | `/agents/me` | The agent who is logged in | 200 |
-| `GET` | `/tickets` | List tickets, newest first, with filters and pagination | 200 |
-| `POST` | `/tickets` | Open a ticket | 201 |
-| `GET` | `/tickets/{ticket_id}` | Get one ticket | 200 |
-| `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | 200 |
-| `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | 200 |
-| `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | 200 |
+| Method | Path | What it does | Who | Success |
+| --- | --- | --- | --- | --- |
+| `POST` | `/auth/token` | Log in as an agent and get an access token | Anyone | 200 |
+| `GET` | `/agents/me` | The agent who is logged in | Agents | 200 |
+| `GET` | `/agents` | List every agent | Admins | 200 |
+| `POST` | `/agents` | Add an agent | Admins | 201 |
+| `PATCH` | `/agents/{agent_id}` | Change an agent's name, password, role, or active flag | Admins | 200 |
+| `GET` | `/tickets` | List tickets, newest first, with filters and pagination | Agents | 200 |
+| `POST` | `/tickets` | Open a ticket for a customer | Agents | 201 |
+| `GET` | `/tickets/{ticket_id}` | Get one ticket | Agents | 200 |
+| `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | Agents | 200 |
+| `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | Agents | 200 |
+| `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | Agents | 200 |
+
+"Agents" means any logged-in agent, admins included. Every endpoint except logging in needs the token described next. The curl examples below leave the header out to stay short.
 
 ### Log in
 
@@ -79,7 +84,33 @@ curl http://127.0.0.1:8000/agents/me -H "Authorization: Bearer eyJhbGciOiJIUzI1N
 
 A missing, expired, or tampered token gets a `401`, and so does a token for an agent who has been deactivated since logging in. In `/docs`, the **Authorize** button logs in and sends the token for you.
 
-Passwords are stored only as Argon2 hashes. To add an agent, or give one a new password, run `uv run python -m scripts.create_agent --email ... --name ...`, which asks for the password so it never lands in your shell history. The seed script's agents have no password until you set one this way.
+Passwords are stored only as Argon2 hashes, and need 15 to 128 characters. The seed script's agents have no password until one is set, so they can't log in.
+
+### Roles and agent management
+
+Each agent is an `agent` or an `admin`. Agents read and update tickets. Admins can do that too, and they also manage agents. An agent who calls an admin endpoint gets a `403`.
+
+The first admin comes from the command line, because only an admin can add agents through the API. The script asks for the password, so it never lands in your shell history:
+
+```bash
+uv run python -m scripts.create_agent --email you@example.com --name "Your Name" --admin
+```
+
+Run it again with the same email to set a new password. After that, admins manage agents through the API:
+
+```bash
+curl -X POST http://127.0.0.1:8000/agents -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Sam Lee", "email": "sam.lee@example.com", "password": "correct horse battery staple"}'
+
+curl -X PATCH http://127.0.0.1:8000/agents/2 -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"is_active": false}'
+```
+
+- `role` is `agent` unless you send `"admin"`. Emails are stored lowercase, and a taken email gets a `409`.
+- A `PATCH` can change `name`, `password`, `role`, and `is_active`, in any mix. The email can't change, because it's the login.
+- Setting `is_active` to `false` locks the agent out at once, even with a token that hasn't expired, because every request looks the agent up. Their tickets keep pointing to them.
+- Admins can't demote or deactivate themselves (`403`), so at least one admin always remains.
 
 ### A ticket
 
@@ -111,7 +142,7 @@ curl -X POST http://127.0.0.1:8000/tickets \
   -d '{"customer_name": "Jane Doe", "phone": "+16145550123", "subject": "Order late", "message": "Where is my order?"}'
 ```
 
-Returns `201 Created` with the new ticket. The server finds the customer by phone number, or adds them if the number is new. A returning customer keeps the name they gave first. The message becomes the first one in the ticket's conversation. All four fields are required:
+Agents use this to open a ticket for a customer, such as after a phone call. Customers open their own tickets through WhatsApp. Returns `201 Created` with the new ticket. The server finds the customer by phone number, or adds them if the number is new. A returning customer keeps the name they gave first. The message becomes the first one in the ticket's conversation. All four fields are required:
 
 | Field | Rule |
 | --- | --- |
@@ -202,7 +233,9 @@ The window slides with each request instead of resetting on the minute, so sendi
 | 200 OK | A list, a ticket, or an updated ticket |
 | 201 Created | A new ticket was opened |
 | 401 Unauthorized | The login failed, or the request's token is missing, expired, or invalid |
-| 404 Not Found | No ticket has that id |
+| 403 Forbidden | The agent is logged in but isn't allowed to do this, such as a non-admin managing agents |
+| 404 Not Found | No ticket or agent has that id |
+| 409 Conflict | An agent with that email already exists |
 | 422 Unprocessable Content | The input breaks a rule: a missing, unknown, or invalid field, or an id, `skip`, or `limit` out of range |
 | 429 Too Many Requests | This IP made more than 60 requests in the last 60 seconds |
 

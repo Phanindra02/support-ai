@@ -12,7 +12,7 @@ from app.cache import get_redis, make_redis
 from app.config import PROJECT_ROOT, settings
 from app.database import Base, get_db, make_engine
 from app.main import app
-from app.models import Agent
+from app.models import Agent, AgentRole
 from app.security import create_access_token, hash_password
 
 
@@ -115,8 +115,8 @@ def session_factory(engine):
 
 
 @pytest.fixture
-def client(session_factory, redis_client):
-    """A test client whose requests use the test database and Redis instead of the app's."""
+def test_app(session_factory, redis_client):
+    """The app, using the test database and Redis instead of its own."""
 
     def get_test_db():
         with session_factory() as db:
@@ -124,12 +124,32 @@ def client(session_factory, redis_client):
 
     app.dependency_overrides[get_db] = get_test_db
     app.dependency_overrides[get_redis] = lambda: redis_client
-    yield TestClient(app)
+    yield app
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def redis_is_down(client):
+def anonymous_client(test_app):
+    """A test client that isn't logged in."""
+    return TestClient(test_app)
+
+
+@pytest.fixture
+def client(test_app, make_agent, auth_header):
+    """A test client logged in as a plain agent, which is all the ticket endpoints need."""
+    agent = make_agent(name="Ada Lovelace", email="ada@example.com")
+    return TestClient(test_app, headers=auth_header(agent))
+
+
+@pytest.fixture
+def admin_client(test_app, make_agent, auth_header):
+    """A test client logged in as an admin."""
+    admin = make_agent(name="Grace Hopper", email="grace@example.com", role=AgentRole.admin)
+    return TestClient(test_app, headers=auth_header(admin))
+
+
+@pytest.fixture
+def redis_is_down(test_app):
     """Point the app at a Redis that isn't running. Nothing listens on port 1."""
     stopped = make_redis("redis://localhost:1/0")
     app.dependency_overrides[get_redis] = lambda: stopped

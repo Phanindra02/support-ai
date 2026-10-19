@@ -10,6 +10,12 @@ from app.models import Agent
 from app.security import ALGORITHM, DUMMY_HASH, hash_password, verify_password
 
 
+@pytest.fixture
+def client(anonymous_client):
+    """These tests log in, or send their own tokens, so they start logged out."""
+    return anonymous_client
+
+
 def log_in(client, email, password):
     # A form, not JSON: the OAuth2 standard says so, and /docs's Authorize button sends one.
     return client.post("/auth/token", data={"username": email, "password": password})
@@ -156,6 +162,7 @@ def test_a_token_from_login_identifies_the_agent(client, make_agent, agent_passw
         "id": agent.id,
         "name": "Sam Lee",
         "email": "sam.lee@example.com",
+        "role": "agent",
         "is_active": True,
         "created_at": body["created_at"],
     }

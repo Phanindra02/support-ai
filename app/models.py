@@ -30,6 +30,12 @@ class MessageSender(enum.StrEnum):
     bot = "bot"
 
 
+class AgentRole(enum.StrEnum):
+    # Agents work on tickets. Admins can do that too, and also manage the agents.
+    agent = "agent"
+    admin = "admin"
+
+
 class Customer(Base):
     """Someone who contacts support. Their phone number identifies them."""
 
@@ -62,6 +68,11 @@ class Agent(Base):
     # Turns an account off without deleting it, because tickets still point to it.
     # server_default fills in the agents that already exist when the column is added.
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
+    role: Mapped[AgentRole] = mapped_column(
+        Enum(AgentRole, validate_strings=True),
+        default=AgentRole.agent,
+        server_default=AgentRole.agent.value,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

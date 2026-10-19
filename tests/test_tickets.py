@@ -240,9 +240,10 @@ def test_list_loads_customers_in_one_query_not_one_per_ticket(client, engine, se
         event.remove(engine, "before_cursor_execute", record)
 
     assert len({ticket["customer"]["phone"] for ticket in response.json()}) == 20
-    # One query for the page of tickets, and one for all their customers. Loading each
-    # customer on its own would take 21.
-    assert len(statements) == 2
+    # One query finds the logged-in agent. Then one gets the page of tickets, and one gets all
+    # their customers. Loading each customer on its own would take 21 instead of 2.
+    assert len(statements) == 3
+    assert "FROM agents" in statements[0]
 
 
 # Update

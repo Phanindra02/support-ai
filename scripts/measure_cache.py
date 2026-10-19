@@ -10,6 +10,9 @@ Start the API in another terminal first, with the rate limit raised so it doesn'
 A "miss" request runs right after the cached counts are deleted, so the API counts tickets in
 Postgres. A "hit" request finds the counts in Redis. Times are measured from this script, so
 they include the HTTP round trip on this machine.
+
+/stats needs a logged-in agent. This script reads the same .env as the API, so it signs a
+token for the first active agent itself, instead of asking for a password.
 """
 
 import argparse
@@ -18,10 +21,14 @@ from statistics import median, quantiles
 
 import httpx
 from redis import Redis
+from sqlalchemy import select
 
 from app.cache import make_redis
 from app.config import settings
+from app.database import SessionLocal
+from app.models import Agent
 from app.routers.tickets import STATS_KEY
+from app.security import create_access_token
 
 REQUESTS = 200
 
@@ -43,6 +50,15 @@ def time_stats(client: httpx.Client, redis: Redis, expected: str) -> list[float]
     return times
 
 
+def agent_token() -> str:
+    """A login token for the first active agent."""
+    with SessionLocal() as db:
+        agent = db.scalar(select(Agent).where(Agent.is_active).order_by(Agent.id).limit(1))
+        if agent is None:
+            raise SystemExit("There are no active agents. Run the seed script first.")
+        return create_access_token(agent)
+
+
 def p95(times: list[float]) -> float:
     """The time 95% of requests beat."""
     return quantiles(times, n=20)[-1]
@@ -54,7 +70,8 @@ def main() -> None:
     args = parser.parse_args()
 
     redis = make_redis(settings.redis_url)
-    with httpx.Client(base_url=args.url) as client:
+    headers = {"Authorization": f"Bearer {agent_token()}"}
+    with httpx.Client(base_url=args.url, headers=headers) as client:
         client.get("/stats")  # Warm-up: opens the connection and loads the tables into memory.
         misses = time_stats(client, redis, "MISS")
         hits = time_stats(client, redis, "HIT")

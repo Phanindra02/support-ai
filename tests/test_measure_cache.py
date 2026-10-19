@@ -3,7 +3,7 @@
 import pytest
 
 from app.config import settings
-from scripts.measure_cache import p95, time_stats
+from scripts.measure_cache import agent_token, p95, time_stats
 
 
 @pytest.fixture(autouse=True)
@@ -30,3 +30,17 @@ def test_stops_with_advice_when_the_rate_limit_is_hit(client, redis_client, monk
     monkeypatch.setattr(settings, "rate_limit_per_minute", 2)
     with pytest.raises(SystemExit, match="RATE_LIMIT_PER_MINUTE=100000"):
         time_stats(client, redis_client, "MISS")
+
+
+def test_signs_a_token_the_api_accepts(anonymous_client, make_agent, session_factory, monkeypatch):
+    monkeypatch.setattr("scripts.measure_cache.SessionLocal", session_factory)
+    make_agent(password_hash=None)  # Like a seeded agent: no password needed.
+    headers = {"Authorization": f"Bearer {agent_token()}"}
+    assert anonymous_client.get("/stats", headers=headers).status_code == 200
+
+
+def test_stops_if_there_is_no_active_agent(session_factory, make_agent, monkeypatch):
+    monkeypatch.setattr("scripts.measure_cache.SessionLocal", session_factory)
+    make_agent(is_active=False)
+    with pytest.raises(SystemExit, match="no active agents"):
+        agent_token()

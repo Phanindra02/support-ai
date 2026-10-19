@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.models import MessageSender, TicketPriority, TicketStatus
+from app.models import AgentRole, MessageSender, TicketPriority, TicketStatus
 
 # E.164: a plus sign, then 2 to 15 digits, with a first digit that isn't 0.
 # [0-9] instead of \d, because \d also matches digits from other alphabets.
@@ -35,7 +35,7 @@ NoNul = AfterValidator(reject_nul)
 
 
 class TicketCreate(BaseModel):
-    """What a customer sends to open a ticket.
+    """What an agent sends to open a ticket for a customer, such as after a phone call.
 
     The server finds the customer by phone number, or adds them if they're new, and the
     message becomes the first one in the ticket's conversation.
@@ -166,8 +166,14 @@ Password = Annotated[str, Field(min_length=15, max_length=128)]
 Email = Annotated[EmailStr, AfterValidator(str.lower)]
 
 
+# Trimmed here rather than for the whole model, which would trim the password too.
+AgentName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100), NoNul
+]
+
+
 class AgentCreate(BaseModel):
-    """A new agent who can log in."""
+    """A new agent who can log in. They're a plain agent unless the role says admin."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -177,17 +183,36 @@ class AgentCreate(BaseModel):
                     "name": "Sam Lee",
                     "email": "sam.lee@example.com",
                     "password": "correct horse battery staple",
+                    "role": "agent",
                 }
             ]
         },
     )
 
-    # Trimmed here rather than for the whole model, which would trim the password too.
-    name: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100), NoNul
-    ]
+    name: AgentName
     email: Email
     password: Password
+    role: AgentRole = AgentRole.agent
+
+
+class AgentUpdate(BaseModel):
+    """What an admin sends to change an agent. The email can't change: it's their login."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"is_active": False}, {"role": "admin"}]},
+    )
+
+    name: AgentName | None = None
+    password: Password | None = None
+    role: AgentRole | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> Self:
+        if all(value is None for value in self.model_dump().values()):
+            raise ValueError("Send name, password, role, is_active, or a mix of them")
+        return self
 
 
 class AgentRead(BaseModel):
@@ -198,6 +223,7 @@ class AgentRead(BaseModel):
     id: int
     name: str
     email: str
+    role: AgentRole
     is_active: bool
     created_at: datetime
 

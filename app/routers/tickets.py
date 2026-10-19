@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import Response
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
@@ -19,8 +19,15 @@ from app.schemas import (
     TicketRead,
     TicketUpdate,
 )
+from app.security import get_current_agent
 
-router = APIRouter(tags=["tickets"])
+# Every ticket endpoint needs a logged-in agent, because tickets hold customers' names, phone
+# numbers, and conversations. Customers reach support through WhatsApp instead.
+router = APIRouter(
+    tags=["tickets"],
+    dependencies=[Depends(get_current_agent)],
+    responses={401: {"model": ErrorResponse, "description": "Not logged in"}},
+)
 
 # Where the stats are cached in Redis, and for how long. Any change to a ticket also clears
 # them, so the 60 seconds only matters if a clear fails or a change skips the API.
