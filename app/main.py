@@ -6,14 +6,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 
 from app.rate_limit import rate_limit
-from app.routers import agents, auth, tickets
+from app.routers import agents, auth, tickets, webhooks
 from app.schemas import ErrorResponse
 
 # Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
 app = FastAPI(title="Support AI")
 
-# Every endpoint on this router checks the rate limit first. /docs isn't an endpoint, so it
-# isn't limited.
+# Every endpoint on this router checks the rate limit first. The Twilio webhook doesn't, and
+# webhooks.py explains why. /docs isn't an endpoint, so it isn't limited either.
 api = APIRouter(
     dependencies=[Depends(rate_limit)],
     responses={429: {"model": ErrorResponse, "description": "Too many requests from this IP"}},
@@ -47,3 +47,4 @@ api.include_router(auth.router)
 api.include_router(agents.router)
 api.include_router(tickets.router)
 app.include_router(api)
+app.include_router(webhooks.router)

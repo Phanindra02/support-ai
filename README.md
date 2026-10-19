@@ -58,8 +58,9 @@ uv run python -m scripts.measure_cache   # time GET /stats with and without the 
 | `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | Agents | 200 |
 | `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | Agents | 200 |
 | `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | Agents | 200 |
+| `POST` | `/webhooks/twilio` | Receive a customer's WhatsApp message | Twilio | 200 |
 
-"Agents" means any logged-in agent, admins included. Every endpoint except logging in needs the token described next. The curl examples below leave the header out to stay short.
+"Agents" means any logged-in agent, admins included. Every endpoint except logging in and the Twilio webhook needs the token described next. The curl examples below leave the header out to stay short.
 
 ### Log in
 
@@ -225,6 +226,14 @@ Each IP address may make 60 requests in any 60 seconds, to every endpoint togeth
 ```
 
 The window slides with each request instead of resetting on the minute, so sending 60 requests just before a minute ends and 60 more just after doesn't work. Requests that get a 429 don't count toward the limit. Set `RATE_LIMIT_PER_MINUTE` to change the limit. If Redis is down, requests aren't limited.
+
+### WhatsApp webhook
+
+Twilio calls `POST /webhooks/twilio` for each WhatsApp message a customer sends, with the message as a form, and reads the reply from the response as TwiML (XML).
+
+- **Only Twilio can call it.** Twilio signs each request with the account's auth token, in the `X-Twilio-Signature` header. A request with a missing or wrong signature gets a `403`. Until `TWILIO_AUTH_TOKEN` is set in `.env`, every request gets a `503`.
+- **No IP rate limit.** Every customer's message arrives from Twilio's servers, so a limit per IP would hold all customers back together.
+- **Behind ngrok,** the signature covers the public `https://` URL Twilio called. uvicorn rebuilds that URL from the `Host` header and from ngrok's `X-Forwarded-Proto` header, which it trusts because ngrok connects from 127.0.0.1.
 
 ### Status codes
 

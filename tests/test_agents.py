@@ -6,8 +6,9 @@ from fastapi.testclient import TestClient
 from app.models import AgentRole, Ticket
 from app.routers.tickets import get_or_create_customer
 
-# The only endpoints anyone may call without logging in.
-PUBLIC = {("GET", "/"), ("POST", "/auth/token")}
+# The only endpoints that don't need an agent's login. Twilio's webhook proves who sent it with
+# a signature instead.
+PUBLIC = {("GET", "/"), ("POST", "/auth/token"), ("POST", "/webhooks/twilio")}
 
 TICKET_ENDPOINTS = [
     ("POST", "/tickets"),

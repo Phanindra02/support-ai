@@ -41,5 +41,9 @@ class Settings(BaseSettings):
     # How long a login token works before the agent has to log in again.
     access_token_expire_minutes: int = Field(default=30, ge=1)
 
+    # Twilio signs every webhook request with this, so the app can check it came from Twilio.
+    # Until it's set, the WhatsApp webhook turns every request away.
+    twilio_auth_token: str | None = None
+
 
 settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.

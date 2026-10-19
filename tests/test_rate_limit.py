@@ -112,11 +112,13 @@ def test_the_docs_are_not_limited(client, low_limit):
     assert client.get("/openapi.json").status_code == 200
 
 
-def test_the_docs_list_the_429_for_every_endpoint(client):
+def test_the_docs_list_the_429_for_every_endpoint_except_webhooks(client):
     paths = client.get("/openapi.json").json()["paths"]
     for path, methods in paths.items():
         for method, operation in methods.items():
-            assert "429" in operation["responses"], f"{method.upper()} {path}"
+            # Webhooks skip the IP limit. app/routers/webhooks.py explains why.
+            expected = not path.startswith("/webhooks/")
+            assert ("429" in operation["responses"]) == expected, f"{method.upper()} {path}"
 
 
 def test_requests_are_allowed_when_redis_is_down(client, low_limit, redis_is_down, caplog):
