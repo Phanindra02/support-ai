@@ -35,4 +35,4 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(default=60, ge=1)
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.

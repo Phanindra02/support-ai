@@ -45,7 +45,10 @@ def explain(connection: Connection, arguments: dict) -> tuple[float, str]:
     # literal_binds writes the values into the SQL, like 'open', so it can follow EXPLAIN.
     sql = query.compile(dialect=connection.dialect, compile_kwargs={"literal_binds": True})
     plan = "\n".join(connection.execute(text(f"EXPLAIN (ANALYZE, BUFFERS) {sql}")).scalars())
-    milliseconds = float(re.search(r"Execution Time: ([\d.]+) ms", plan).group(1))
+    execution_time = re.search(r"Execution Time: ([\d.]+) ms", plan)
+    if execution_time is None:
+        raise ValueError("EXPLAIN ANALYZE output did not include an execution time")
+    milliseconds = float(execution_time.group(1))
     return milliseconds, plan
 
 

@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -50,7 +50,9 @@ MAX_INT = 2_147_483_647
 TicketId = Annotated[int, Path(ge=1, le=MAX_INT)]
 
 # Lists the 404 response in /docs for endpoints that look up one ticket.
-NOT_FOUND = {404: {"model": ErrorResponse, "description": "Ticket not found"}}
+NOT_FOUND: dict[int | str, dict[str, Any]] = {
+    404: {"model": ErrorResponse, "description": "Ticket not found"}
+}
 
 
 def get_ticket_or_404(db: Session, ticket_id: int) -> Ticket:
@@ -82,8 +84,10 @@ def get_or_create_customer(db: Session, name: str, phone: str) -> Customer:
         with db.begin_nested():
             customer = Customer(name=name, phone=phone)
             db.add(customer)
-    except IntegrityError:
+    except IntegrityError as exc:
         customer = find_customer(db, phone)
+        if customer is None:
+            raise exc
     return customer
 
 
@@ -92,7 +96,7 @@ def ticket_list_query(
     priority: TicketPriority | None = None,
     skip: int = 0,
     limit: int = 20,
-) -> Select[tuple[Ticket]]:
+) -> Select[Ticket]:
     """The query behind GET /tickets. scripts/explain_list.py times this exact query."""
     # selectinload fetches the customers for the whole page in one more query. Without it,
     # reading each ticket's customer would run a query per ticket (the "N+1 queries" problem).

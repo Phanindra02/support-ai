@@ -41,7 +41,8 @@ def get_redis() -> Redis:
 def read_cache(redis: Redis, key: str) -> str | None:
     """The cached value, or None if there isn't one or Redis can't be reached."""
     try:
-        return redis.get(key)
+        value = redis.get(key)
+        return value.decode() if isinstance(value, bytes) else value
     except RedisError as error:
         logger.warning("Skipped reading the cache, because Redis failed: %s", error)
         return None

@@ -332,7 +332,7 @@ def add_fake_tickets(
 
 
 def count_rows(db: Session, model) -> int:
-    return db.scalar(select(func.count()).select_from(model))
+    return db.scalar(select(func.count()).select_from(model)) or 0
 
 
 def main() -> None:
