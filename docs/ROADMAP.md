@@ -77,7 +77,7 @@ Done when: agents log in with JWTs, WhatsApp messages become tickets, and urgent
 - [x] Send the customer a confirmation reply.
 - [ ] Start n8n with `npx n8n` and build a workflow: a Webhook trigger that posts ticket details to a Slack channel. Commit the exported workflow JSON in `infra/n8n/`. **[You]** Create the Slack channel and connect Slack in n8n.
 - [x] When a ticket is marked urgent, have the API call that n8n webhook.
-- [ ] Add a shared secret header to that call so only the API can trigger it.
+- [x] Add a shared secret header to that call so only the API can trigger it.
 - [ ] Write tests that fake the Twilio and n8n calls.
 
 Why WhatsApp: plain SMS to US numbers needs A2P 10DLC registration, trial accounts can't register, and reviews take 10–15 days. WhatsApp skips that registration.

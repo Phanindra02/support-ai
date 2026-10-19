@@ -253,6 +253,7 @@ When an agent changes a ticket's priority to `urgent`, the API posts the ticket 
  "priority": "urgent", "created_at": "2026-10-19T14:02:11.520331Z", "marked_urgent_by": "Ada Lovelace"}
 ```
 
+- Only the API can trigger the workflow. Each call carries a shared secret in the `X-Webhook-Secret` header (`N8N_WEBHOOK_SECRET`), and n8n's Header Auth rejects any call without it. No alerts are sent until the secret is set.
 - Only a change to urgent sends an alert. Sending `urgent` again for a ticket that already is sends nothing.
 - The call runs after the response is sent (a FastAPI background task), so the agent never waits on n8n or Slack.
 - If n8n is down or answers with an error, the update still succeeds, and a warning is logged. Nothing retries yet. Stage 6's job queue can.

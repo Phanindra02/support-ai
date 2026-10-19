@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # A ticket update shouldn't leave a thread waiting long on n8n.
 TIMEOUT_SECONDS = 5
 
+# The header n8n's Header Auth checks. The workflow runs only if it holds the shared secret.
+SECRET_HEADER = "X-Webhook-Secret"
+
 http_client = httpx.Client(timeout=TIMEOUT_SECONDS)
 
 
@@ -29,8 +32,15 @@ def get_http_client() -> httpx.Client:
 
 def send_urgent_alert(client: httpx.Client, alert: UrgentAlert) -> None:
     """Post an urgent ticket to the n8n webhook. Runs after the response has been sent."""
+    if not settings.n8n_webhook_secret:
+        logger.warning("Skipped the urgent-ticket alert, because N8N_WEBHOOK_SECRET isn't set")
+        return
     try:
-        response = client.post(settings.n8n_webhook_url, json=alert.model_dump(mode="json"))
+        response = client.post(
+            settings.n8n_webhook_url,
+            json=alert.model_dump(mode="json"),
+            headers={SECRET_HEADER: settings.n8n_webhook_secret},
+        )
         response.raise_for_status()
     except httpx.HTTPError as error:
         # Nothing retries yet. Stage 6 adds a job queue, which could.

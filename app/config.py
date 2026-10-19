@@ -48,5 +48,9 @@ class Settings(BaseSettings):
     # The n8n webhook that posts urgent tickets to Slack (infra/n8n/urgent-ticket.json).
     n8n_webhook_url: str = "http://localhost:5678/webhook/urgent-ticket"
 
+    # Sent with every call to that webhook, which n8n checks, so only the API can trigger it.
+    # No alerts are sent until it's set.
+    n8n_webhook_secret: str | None = None
+
 
 settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.

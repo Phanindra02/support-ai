@@ -9,6 +9,13 @@ import pytest
 from app.alerts import http_client
 from app.config import settings
 
+SECRET = "made-up-n8n-secret-for-tests"
+
+
+@pytest.fixture(autouse=True)
+def n8n_secret(monkeypatch):
+    monkeypatch.setattr(settings, "n8n_webhook_secret", SECRET)
+
 
 @pytest.fixture
 def ticket(make_ticket):
@@ -86,3 +93,17 @@ def test_the_update_succeeds_even_if_the_alert_fails(client, ticket, n8n, caplog
 
 def test_calls_to_n8n_give_up_after_5_seconds():
     assert http_client.timeout == httpx.Timeout(5)
+
+
+def test_every_alert_carries_the_shared_secret(client, ticket, n8n):
+    mark(client, ticket, priority="urgent")
+    assert n8n.requests[0].headers["X-Webhook-Secret"] == SECRET
+
+
+@pytest.mark.parametrize("secret", [None, ""])
+def test_no_alert_is_sent_until_the_secret_is_set(client, ticket, n8n, caplog, monkeypatch, secret):
+    monkeypatch.setattr(settings, "n8n_webhook_secret", secret)
+    with caplog.at_level(logging.WARNING, logger="app.alerts"):
+        mark(client, ticket, priority="urgent")
+    assert n8n.requests == []
+    assert "N8N_WEBHOOK_SECRET isn't set" in caplog.text
