@@ -228,6 +228,37 @@ class AgentRead(BaseModel):
     created_at: datetime
 
 
+# WhatsApp, through Twilio
+
+
+def drop_nul(value: str) -> str:
+    """Remove the NUL character, which Postgres can't store.
+
+    Unlike in the API's own forms, the text is cleaned rather than refused: a 422 would make
+    Twilio drop the customer's message.
+    """
+    return value.replace("\x00", "")
+
+
+class WhatsAppMessage(BaseModel):
+    """The fields this app reads from Twilio's incoming-message webhook.
+
+    Not extra="forbid": Twilio sends about 20 fields, and adds new ones from time to time.
+    The signature check has already proved the request came from Twilio.
+    """
+
+    # The customer: "whatsapp:" and their number in E.164, like whatsapp:+16145550123.
+    sender: Annotated[str, Field(alias="From", pattern=r"^whatsapp:\+[1-9][0-9]{1,14}$")]
+    # Empty when the customer sent only a photo, file, or location.
+    body: Annotated[str, Field(alias="Body"), AfterValidator(drop_nul)] = ""
+    # The name on the customer's WhatsApp profile, if they've set one.
+    profile_name: Annotated[str, Field(alias="ProfileName"), AfterValidator(drop_nul)] = ""
+
+    @property
+    def phone(self) -> str:
+        return self.sender.removeprefix("whatsapp:")
+
+
 class Token(BaseModel):
     """What a successful login returns. The field names come from the OAuth2 standard."""
 

@@ -231,6 +231,14 @@ The window slides with each request instead of resetting on the minute, so sendi
 
 Twilio calls `POST /webhooks/twilio` for each WhatsApp message a customer sends, with the message as a form, and reads the reply from the response as TwiML (XML).
 
+Each message becomes part of a ticket:
+
+- **The customer** is found by their WhatsApp number, or added, named after their WhatsApp profile (or their number, if they have no profile name). A customer an agent already added keeps their name.
+- **The ticket** is their newest open or pending ticket. If they have none, a new ticket opens, with the first line of the message as its subject (cut to 80 characters).
+- **A reply to a pending ticket** makes it open again. Pending means the team is waiting on the customer, so once they answer, it's the team's turn.
+- **Messages sent at once** by the same customer land on one ticket. Each request locks the customer's row (`SELECT ... FOR UPDATE`) while it works, so a second message waits for the first instead of opening a second ticket.
+- A message with no text, such as a photo, is stored as a note saying so. Media isn't saved yet.
+
 - **Only Twilio can call it.** Twilio signs each request with the account's auth token, in the `X-Twilio-Signature` header. A request with a missing or wrong signature gets a `403`. Until `TWILIO_AUTH_TOKEN` is set in `.env`, every request gets a `503`.
 - **No IP rate limit.** Every customer's message arrives from Twilio's servers, so a limit per IP would hold all customers back together.
 - **Behind ngrok,** the signature covers the public `https://` URL Twilio called. uvicorn rebuilds that URL from the `Host` header and from ngrok's `X-Forwarded-Proto` header, which it trusts because ngrok connects from 127.0.0.1.
