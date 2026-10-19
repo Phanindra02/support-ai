@@ -17,3 +17,6 @@ scratch.py
 
 # Generated reports (rebuild with: uv run python -m scripts.weekly_report)
 reports/
+
+# Generated knowledge graph (rebuild with /graphify)
+graphify-out/
