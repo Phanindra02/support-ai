@@ -1,7 +1,15 @@
 from datetime import datetime
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from app.models import MessageSender, TicketPriority, TicketStatus
 
@@ -143,3 +151,63 @@ class ErrorResponse(BaseModel):
     """The shape of an error like a 404, so /docs can show it."""
 
     detail: str
+
+
+# Agents and logins
+
+# NIST's password guidance (SP 800-63B) asks for at least 15 characters when a password is
+# the only thing protecting an account, and no rules about digits or symbols. The upper limit
+# stops anyone from making the server hash a huge "password". Spaces are kept, not trimmed,
+# because they're part of the password.
+Password = Annotated[str, Field(min_length=15, max_length=128)]
+
+# A valid address, lowercased so the same login can't exist twice with different capitals.
+# The email checker also keeps it to 254 characters, the column size.
+Email = Annotated[EmailStr, AfterValidator(str.lower)]
+
+
+class AgentCreate(BaseModel):
+    """A new agent who can log in."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Sam Lee",
+                    "email": "sam.lee@example.com",
+                    "password": "correct horse battery staple",
+                }
+            ]
+        },
+    )
+
+    # Trimmed here rather than for the whole model, which would trim the password too.
+    name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100), NoNul
+    ]
+    email: Email
+    password: Password
+
+
+class AgentRead(BaseModel):
+    """An agent, as the API shows them. Never the password hash."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: str
+    is_active: bool
+    created_at: datetime
+
+
+class Token(BaseModel):
+    """What a successful login returns. The field names come from the OAuth2 standard."""
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"access_token": "eyJhbGciOi...", "token_type": "bearer"}]}
+    )
+
+    access_token: str
+    token_type: str

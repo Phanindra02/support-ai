@@ -19,12 +19,13 @@ brew install redis
 brew services start redis
 ```
 
-Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST_DATABASE_URL`. The Redis URLs work as they are. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
+Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST_DATABASE_URL`. Replace `JWT_SECRET_KEY` with the output of `openssl rand -hex 32`. The Redis URLs work as they are. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.
 
 ```bash
 cp .env.example .env
 uv sync
 uv run alembic upgrade head              # create the tables
+uv run python -m scripts.create_agent --email you@example.com --name "Your Name"   # asks for a password
 uv run uvicorn app.main:app --reload
 ```
 
@@ -46,12 +47,39 @@ uv run python -m scripts.measure_cache   # time GET /stats with and without the 
 
 | Method | Path | What it does | Success |
 | --- | --- | --- | --- |
+| `POST` | `/auth/token` | Log in as an agent and get an access token | 200 |
+| `GET` | `/agents/me` | The agent who is logged in | 200 |
 | `GET` | `/tickets` | List tickets, newest first, with filters and pagination | 200 |
 | `POST` | `/tickets` | Open a ticket | 201 |
 | `GET` | `/tickets/{ticket_id}` | Get one ticket | 200 |
 | `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | 200 |
 | `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | 200 |
 | `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | 200 |
+
+### Log in
+
+Agents log in with their email and password, and get back a signed access token (a JWT) that works for 30 minutes:
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/token \
+  -d "username=you@example.com" --data-urlencode "password=your password"
+```
+
+```json
+{"access_token": "eyJhbGciOiJIUzI1NiIs...", "token_type": "bearer"}
+```
+
+The body is a form, not JSON, and the email goes in the `username` field, because that's what the OAuth2 standard says. A wrong email or password gets a `401` with `{"detail": "Incorrect email or password"}`, the same either way, so it doesn't reveal which emails have accounts.
+
+Send the token on later requests in the `Authorization` header:
+
+```bash
+curl http://127.0.0.1:8000/agents/me -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
+```
+
+A missing, expired, or tampered token gets a `401`, and so does a token for an agent who has been deactivated since logging in. In `/docs`, the **Authorize** button logs in and sends the token for you.
+
+Passwords are stored only as Argon2 hashes. To add an agent, or give one a new password, run `uv run python -m scripts.create_agent --email ... --name ...`, which asks for the password so it never lands in your shell history. The seed script's agents have no password until you set one this way.
 
 ### A ticket
 
@@ -173,6 +201,7 @@ The window slides with each request instead of resetting on the minute, so sendi
 | --- | --- |
 | 200 OK | A list, a ticket, or an updated ticket |
 | 201 Created | A new ticket was opened |
+| 401 Unauthorized | The login failed, or the request's token is missing, expired, or invalid |
 | 404 Not Found | No ticket has that id |
 | 422 Unprocessable Content | The input breaks a rule: a missing, unknown, or invalid field, or an id, `skip`, or `limit` out of range |
 | 429 Too Many Requests | This IP made more than 60 requests in the last 60 seconds |

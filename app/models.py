@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -48,13 +48,20 @@ class Customer(Base):
 
 
 class Agent(Base):
-    """A member of the support team. Stage 3 adds passwords and roles."""
+    """A member of the support team, who logs in with their email and password."""
 
     __tablename__ = "agents"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
+    # Lowercase, so Sam.Lee@example.com and sam.lee@example.com are the same login.
     email: Mapped[str] = mapped_column(String(254), unique=True)  # The longest valid address.
+    # An Argon2 hash of the password, never the password itself. Empty means the agent can't
+    # log in yet, like the agents the seed script makes.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    # Turns an account off without deleting it, because tickets still point to it.
+    # server_default fills in the agents that already exist when the column is added.
+    is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

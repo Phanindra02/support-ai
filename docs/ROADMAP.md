@@ -67,7 +67,7 @@ Done when: the API runs on Postgres with versioned migrations, measured index sp
 
 Done when: agents log in with JWTs, WhatsApp messages become tickets, and urgent tickets post to Slack through n8n.
 
-- [ ] Add agent accounts with hashed passwords and a login endpoint that returns a JWT, following FastAPI's official security tutorial.
+- [x] Add agent accounts with hashed passwords and a login endpoint that returns a JWT, following FastAPI's official security tutorial.
 - [ ] Require login for agent endpoints, and add two roles: agents update tickets, and admins manage agents.
 - [ ] **[You]** Create a Twilio account and join the WhatsApp sandbox (not plain SMS; see the note below). Put the account SID and auth token in `.env`.
 - [ ] Install ngrok with Homebrew and run it so Twilio can reach the API. **[You]** Create an ngrok account and add its authtoken.

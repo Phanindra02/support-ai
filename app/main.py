@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 
 from app.rate_limit import rate_limit
-from app.routers import tickets
+from app.routers import agents, auth, tickets
 from app.schemas import ErrorResponse
 
 # Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
@@ -43,7 +43,7 @@ def root():
     return {"message": "Support API is running"}
 
 
+api.include_router(auth.router)
+api.include_router(agents.router)
 api.include_router(tickets.router)
-
-# Last, because include_router copies the routes that exist at the moment it runs.
 app.include_router(api)

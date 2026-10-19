@@ -34,5 +34,12 @@ class Settings(BaseSettings):
     # How many requests each IP address may make in any 60 seconds.
     rate_limit_per_minute: int = Field(default=60, ge=1)
 
+    # Signs agents' login tokens (JWTs). Anyone who has it can make a token for any agent.
+    # HS256 needs a key at least as long as its 32-byte output to be as strong as it can be.
+    jwt_secret_key: str = Field(min_length=32)
+
+    # How long a login token works before the agent has to log in again.
+    access_token_expire_minutes: int = Field(default=30, ge=1)
+
 
 settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.

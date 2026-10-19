@@ -12,6 +12,8 @@ from app.cache import get_redis, make_redis
 from app.config import PROJECT_ROOT, settings
 from app.database import Base, get_db, make_engine
 from app.main import app
+from app.models import Agent
+from app.security import create_access_token, hash_password
 
 
 def run_alembic(engine, step, revision):
@@ -133,6 +135,50 @@ def redis_is_down(client):
     app.dependency_overrides[get_redis] = lambda: stopped
     yield
     stopped.close()
+
+
+@pytest.fixture(scope="session")
+def agent_password():
+    """The password every agent made by make_agent has."""
+    return "correct horse battery staple"
+
+
+@pytest.fixture(scope="session")
+def agent_password_hash(agent_password):
+    """Hashing is slow on purpose (about 30 ms), so the tests' password is hashed once."""
+    return hash_password(agent_password)
+
+
+@pytest.fixture
+def make_agent(session_factory, agent_password_hash):
+    """Save an agent who can log in with agent_password. Keyword arguments change fields."""
+
+    def make(**fields):
+        with session_factory() as db:
+            agent = Agent(
+                **{
+                    "name": "Sam Lee",
+                    "email": "sam.lee@example.com",
+                    "password_hash": agent_password_hash,
+                    **fields,
+                }
+            )
+            db.add(agent)
+            db.commit()
+            db.refresh(agent)  # Loads the id and defaults while the session is still open.
+            return agent
+
+    return make
+
+
+@pytest.fixture
+def auth_header():
+    """The header that logs a request in as an agent, without going through /auth/token."""
+
+    def header(agent):
+        return {"Authorization": f"Bearer {create_access_token(agent)}"}
+
+    return header
 
 
 @pytest.fixture

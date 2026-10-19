@@ -20,7 +20,7 @@ from app.schemas import (
     TicketUpdate,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["tickets"])
 
 # Where the stats are cached in Redis, and for how long. Any change to a ticket also clears
 # them, so the 60 seconds only matters if a clear fails or a change skips the API.

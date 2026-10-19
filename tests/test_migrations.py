@@ -11,9 +11,11 @@ from sqlalchemy import inspect, text
 from app.config import PROJECT_ROOT
 from app.database import Base
 
-# The migrations that change data, by revision id.
+# Migrations that tests run up to, by revision id.
 CREATE_TICKETS = "086e8c9716c3"
 ADD_CUSTOMERS = "5a8da3b2d2f4"
+INDEX_TICKETS = "a8dd85a3d297"
+ADD_AGENT_PASSWORDS = "89711c13eabd"
 
 
 @pytest.fixture
@@ -129,4 +131,19 @@ def test_removing_customers_puts_them_and_the_first_message_back_on_tickets(
     assert rows(empty_database, old_shape) == [
         ("Jane Doe", "+16145550123", "Order late", "Where is my order?"),
         ("Jane Doe", "+16145550123", "No messages", ""),
+    ]
+
+
+def test_agents_already_in_the_table_get_no_password_and_stay_active(empty_database, migrate):
+    migrate(empty_database, command.upgrade, INDEX_TICKETS)
+    with empty_database.begin() as connection:
+        connection.execute(
+            text("INSERT INTO agents (name, email) VALUES ('Sam Lee', 'sam.lee@example.com')")
+        )
+
+    migrate(empty_database, command.upgrade, ADD_AGENT_PASSWORDS)
+
+    # No one can log in as an existing agent until a password is set for them.
+    assert rows(empty_database, "SELECT email, password_hash, is_active FROM agents") == [
+        ("sam.lee@example.com", None, True)
     ]
