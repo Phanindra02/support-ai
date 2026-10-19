@@ -1,5 +1,6 @@
 """Shared test fixtures. Tests run on the Postgres database named in TEST_DATABASE_URL."""
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -8,6 +9,7 @@ from redis import Redis
 from sqlalchemy import make_url, text
 from sqlalchemy.orm import sessionmaker
 
+from app.alerts import get_http_client
 from app.cache import get_redis, make_redis
 from app.config import PROJECT_ROOT, settings
 from app.database import Base, get_db, make_engine
@@ -114,9 +116,27 @@ def session_factory(engine):
     return sessionmaker(bind=engine)
 
 
+class FakeN8n:
+    """Stands in for n8n, so no test calls the real one. Keeps every request it gets."""
+
+    def __init__(self):
+        self.requests: list[httpx.Request] = []
+        # Replace to answer differently, or raise an httpx error to act as if n8n were down.
+        self.reply = lambda request: httpx.Response(200, json={"message": "Workflow was started"})
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self.reply(request)
+
+
 @pytest.fixture
-def test_app(session_factory, redis_client):
-    """The app, using the test database and Redis instead of its own."""
+def n8n():
+    return FakeN8n()
+
+
+@pytest.fixture
+def test_app(session_factory, redis_client, n8n):
+    """The app, using the test database, Redis, and a fake n8n instead of its own."""
 
     def get_test_db():
         with session_factory() as db:
@@ -124,8 +144,11 @@ def test_app(session_factory, redis_client):
 
     app.dependency_overrides[get_db] = get_test_db
     app.dependency_overrides[get_redis] = lambda: redis_client
+    fake_n8n_client = httpx.Client(transport=httpx.MockTransport(n8n.handle))
+    app.dependency_overrides[get_http_client] = lambda: fake_n8n_client
     yield app
     app.dependency_overrides.clear()
+    fake_n8n_client.close()
 
 
 @pytest.fixture

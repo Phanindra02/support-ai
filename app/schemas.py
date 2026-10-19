@@ -228,6 +228,22 @@ class AgentRead(BaseModel):
     created_at: datetime
 
 
+class UrgentAlert(BaseModel):
+    """What the API sends n8n when a ticket is marked urgent, for the Slack message.
+
+    The customer's phone number is left out: the Slack channel doesn't need it, and fewer
+    copies of personal data means fewer places it can leak from.
+    """
+
+    ticket_id: int
+    subject: str
+    customer_name: str
+    status: TicketStatus
+    priority: TicketPriority
+    created_at: datetime
+    marked_urgent_by: str
+
+
 # WhatsApp, through Twilio
 
 

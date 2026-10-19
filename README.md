@@ -198,7 +198,7 @@ curl -X PATCH http://127.0.0.1:8000/tickets/1 \
   -d '{"status": "closed"}'
 ```
 
-Send `status`, `priority`, or both. A body with neither, or with any other field, gets a 422. Closing a ticket sets `closed_at`, closing it again keeps the first time, and reopening it (to `open` or `pending`) clears it. Sending the same update twice has the same effect as sending it once.
+Send `status`, `priority`, or both. A body with neither, or with any other field, gets a 422. Changing a ticket's priority to `urgent` also posts it to the team's Slack channel (see [Urgent ticket alerts](#urgent-ticket-alerts)). Closing a ticket sets `closed_at`, closing it again keeps the first time, and reopening it (to `open` or `pending`) clears it. Sending the same update twice has the same effect as sending it once.
 
 ### Ticket counts
 
@@ -243,6 +243,20 @@ Each message becomes part of a ticket:
 - **Only Twilio can call it.** Twilio signs each request with the account's auth token, in the `X-Twilio-Signature` header. A request with a missing or wrong signature gets a `403`. Until `TWILIO_AUTH_TOKEN` is set in `.env`, every request gets a `503`.
 - **No IP rate limit.** Every customer's message arrives from Twilio's servers, so a limit per IP would hold all customers back together.
 - **Behind ngrok,** the signature covers the public `https://` URL Twilio called. uvicorn rebuilds that URL from the `Host` header and from ngrok's `X-Forwarded-Proto` header, which it trusts because ngrok connects from 127.0.0.1.
+
+### Urgent ticket alerts
+
+When an agent changes a ticket's priority to `urgent`, the API posts the ticket to an n8n webhook (`N8N_WEBHOOK_URL`), and the n8n workflow in `infra/n8n/` posts it to Slack:
+
+```json
+{"ticket_id": 42, "subject": "Card charged twice", "customer_name": "Jane Doe", "status": "open",
+ "priority": "urgent", "created_at": "2026-10-19T14:02:11.520331Z", "marked_urgent_by": "Ada Lovelace"}
+```
+
+- Only a change to urgent sends an alert. Sending `urgent` again for a ticket that already is sends nothing.
+- The call runs after the response is sent (a FastAPI background task), so the agent never waits on n8n or Slack.
+- If n8n is down or answers with an error, the update still succeeds, and a warning is logged. Nothing retries yet. Stage 6's job queue can.
+- The customer's phone number is left out. The channel doesn't need it.
 
 ### Status codes
 

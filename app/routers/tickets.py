@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query
 from fastapi.responses import Response
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.alerts import get_http_client, send_urgent_alert
 from app.cache import RedisDep, clear_cache, read_cache, write_cache
 from app.database import SessionDep
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
@@ -18,8 +20,9 @@ from app.schemas import (
     TicketCreate,
     TicketRead,
     TicketUpdate,
+    UrgentAlert,
 )
-from app.security import get_current_agent
+from app.security import CurrentAgent, get_current_agent
 
 # Every ticket endpoint needs a logged-in agent, because tickets hold customers' names, phone
 # numbers, and conversations. Customers reach support through WhatsApp instead.
@@ -181,10 +184,28 @@ def list_messages(ticket_id: TicketId, db: SessionDep):
 
 
 @router.patch("/tickets/{ticket_id}", response_model=TicketRead, responses=NOT_FOUND)
-def update_ticket(ticket_id: TicketId, ticket_in: TicketUpdate, db: SessionDep, redis: RedisDep):
+def update_ticket(
+    ticket_id: TicketId,
+    ticket_in: TicketUpdate,
+    db: SessionDep,
+    redis: RedisDep,
+    agent: CurrentAgent,
+    background_tasks: BackgroundTasks,
+    http_client: Annotated[httpx.Client, Depends(get_http_client)],
+):
+    """Change a ticket's status, priority, or both.
+
+    Marking a ticket urgent posts it to the team's Slack channel, through n8n.
+    """
     ticket = get_ticket_or_404(db, ticket_id)
     # Keep only the fields that were sent. Missing or null fields stay as they are.
     changes = ticket_in.model_dump(exclude_none=True)
+    # Only a change to urgent alerts. Sending "urgent" again for a ticket that already is
+    # changes nothing, so it shouldn't post to Slack again.
+    became_urgent = (
+        changes.get("priority") == TicketPriority.urgent
+        and ticket.priority != TicketPriority.urgent
+    )
 
     # Stamp closed_at when a ticket closes, and clear it if the ticket is reopened.
     new_status = changes.get("status")
@@ -198,4 +219,18 @@ def update_ticket(ticket_id: TicketId, ticket_in: TicketUpdate, db: SessionDep, 
     db.commit()
     clear_cache(redis, STATS_KEY)  # The counts by status and priority may have changed.
     db.refresh(ticket)
+
+    if became_urgent:
+        alert = UrgentAlert(
+            ticket_id=ticket.id,
+            subject=ticket.subject,
+            customer_name=ticket.customer.name,
+            status=ticket.status,
+            priority=ticket.priority,
+            created_at=ticket.created_at,
+            marked_urgent_by=agent.name,
+        )
+        # Runs after the response is sent, so the agent doesn't wait on n8n and Slack, and
+        # a failure there can't undo the update.
+        background_tasks.add_task(send_urgent_alert, http_client, alert)
     return ticket

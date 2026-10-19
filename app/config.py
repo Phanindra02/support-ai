@@ -45,5 +45,8 @@ class Settings(BaseSettings):
     # Until it's set, the WhatsApp webhook turns every request away.
     twilio_auth_token: str | None = None
 
+    # The n8n webhook that posts urgent tickets to Slack (infra/n8n/urgent-ticket.json).
+    n8n_webhook_url: str = "http://localhost:5678/webhook/urgent-ticket"
+
 
 settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.
