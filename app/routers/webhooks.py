@@ -30,6 +30,14 @@ SUBJECT_LENGTH = 80
 NO_TEXT = "(No text. The customer sent something else, such as a photo.)"
 
 
+def confirmation(ticket_id: int) -> str:
+    """The reply a customer gets when their message opens a ticket."""
+    return (
+        f"Thanks, we got your message. Your ticket number is {ticket_id}, "
+        "and someone from our team will reply here soon."
+    )
+
+
 async def verify_twilio_signature(request: Request) -> None:
     """Stop any request that Twilio didn't sign, with a 403.
 
@@ -95,8 +103,11 @@ def find_open_ticket(db: Session, customer: Customer) -> Ticket | None:
     )
 
 
-def add_to_ticket(db: Session, message: WhatsAppMessage) -> Ticket:
-    """Add a customer's message to their open ticket, or open a new ticket with it."""
+def add_to_ticket(db: Session, message: WhatsAppMessage) -> tuple[Ticket, bool]:
+    """Add a customer's message to their open ticket, or open a new ticket with it.
+
+    Also says whether the ticket is new.
+    """
     # A customer without a WhatsApp profile name goes by their number until an agent knows more.
     name = message.profile_name.strip()[:100] or message.phone
     customer = get_or_create_customer(db, name, message.phone)
@@ -108,6 +119,7 @@ def add_to_ticket(db: Session, message: WhatsAppMessage) -> Ticket:
     db.refresh(customer, with_for_update=True)
 
     ticket = find_open_ticket(db, customer)
+    is_new = ticket is None
     if ticket is None:
         ticket = Ticket(customer=customer, subject=subject_from(message.body))
         db.add(ticket)
@@ -119,7 +131,7 @@ def add_to_ticket(db: Session, message: WhatsAppMessage) -> Ticket:
     # Setting message.ticket, rather than appending to ticket.messages, avoids loading every
     # earlier message in the conversation just to add one.
     db.add(Message(ticket=ticket, sender=MessageSender.customer, body=message.body or NO_TEXT))
-    return ticket
+    return ticket, is_new
 
 
 @router.post(
@@ -133,10 +145,17 @@ def receive_whatsapp_message(
     """Twilio calls this for each WhatsApp message a customer sends.
 
     The customer is found by phone number, or added. The message joins their open ticket, or
-    opens a new one if they have none.
+    opens a new one if they have none. A new ticket gets a confirmation reply, which Twilio
+    sends to the customer on WhatsApp.
     """
-    add_to_ticket(db, message)
+    ticket, is_new = add_to_ticket(db, message)
     db.commit()
     clear_cache(redis, STATS_KEY)  # A ticket may have opened, or gone from pending to open.
-    # An empty <Response/> tells Twilio there's nothing to send back.
-    return twiml(MessagingResponse())
+
+    reply = MessagingResponse()
+    # Only when a ticket opens. Someone who sends five short messages in a row shouldn't get
+    # five confirmations, and later messages join a ticket they already know about. An empty
+    # <Response/> tells Twilio there's nothing to send.
+    if is_new:
+        reply.message(confirmation(ticket.id))
+    return twiml(reply)

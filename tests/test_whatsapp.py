@@ -3,10 +3,12 @@ the same way Twilio does, so no Twilio account or network is needed."""
 
 import time
 from threading import Thread
+from xml.etree import ElementTree
 
 import pytest
 from sqlalchemy import select
 from twilio.request_validator import RequestValidator
+from twilio.twiml.messaging_response import MessagingResponse
 
 from app.config import settings
 from app.models import Customer, MessageSender, Ticket, TicketPriority, TicketStatus
@@ -61,7 +63,7 @@ def test_a_request_signed_by_twilio_gets_twiml_back(client):
     response = post_from_twilio(client, whatsapp_form())
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "application/xml"
-    assert response.text == EMPTY_TWIML
+    assert response.text.startswith('<?xml version="1.0" encoding="UTF-8"?><Response>')
 
 
 def test_a_request_without_a_signature_gets_a_403(client):
@@ -318,3 +320,47 @@ def test_messages_sent_at_once_by_one_customer_share_a_ticket(client, session_fa
     closed, shared = all_tickets(session_factory)
     assert shared["subject"] == "Opened by the other request"
     assert shared["messages"] == [(MessageSender.customer, "Second message")]
+
+
+# The confirmation reply
+
+
+def replies(response):
+    """The messages a TwiML response tells Twilio to send back."""
+    return [message.text for message in ElementTree.fromstring(response.text).iter("Message")]
+
+
+def test_a_message_that_opens_a_ticket_gets_a_confirmation(client):
+    response = send(client, "Where is my order?")
+    assert replies(response) == [
+        "Thanks, we got your message. Your ticket number is 1, "
+        "and someone from our team will reply here soon."
+    ]
+
+
+def test_later_messages_on_the_same_ticket_get_no_reply(client):
+    send(client, "Where is my order?")
+    response = send(client, "It's order 1234.")
+    assert response.text == EMPTY_TWIML
+
+
+def test_a_new_ticket_after_a_closed_one_gets_its_own_number(client, session_factory):
+    send(client, "Where is my order?")
+    with session_factory() as db:
+        db.get(Ticket, 1).status = TicketStatus.closed
+        db.commit()
+
+    response = send(client, "Now I need a refund.")
+
+    assert "Your ticket number is 2," in replies(response)[0]
+
+
+def test_text_in_the_reply_is_escaped_for_xml(client):
+    # TwiML is XML, so the library escapes <, >, and &. Only numbers go in this reply today,
+    # but this keeps it safe if names or subjects are added later.
+    reply = MessagingResponse()
+    reply.message("<Redirect>https://evil.example.com</Redirect> & more")
+    assert "<Redirect>" not in str(reply)
+    assert [m.text for m in ElementTree.fromstring(str(reply)).iter("Message")] == [
+        "<Redirect>https://evil.example.com</Redirect> & more"
+    ]
