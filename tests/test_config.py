@@ -76,10 +76,18 @@ def test_env_example_lists_every_setting():
     assert names == {name.upper() for name in Settings.model_fields}
 
 
-def test_env_example_values_load(no_settings_in_environment):
+def test_env_example_values_load(no_settings_in_environment, monkeypatch):
+    # The real JWT secret has to come from somewhere else, such as .env.
+    monkeypatch.setenv("JWT_SECRET_KEY", JWT_SECRET_KEY)
     settings = Settings(_env_file=ENV_EXAMPLE)
     assert settings.database_url.startswith("postgresql+psycopg://")
     assert settings.redis_url.startswith("redis://")
+
+
+def test_the_app_will_not_start_with_the_jwt_secret_from_env_example(no_settings_in_environment):
+    # Everyone can read .env.example on GitHub, so a key from it could sign anyone's token.
+    with pytest.raises(ValidationError, match="jwt_secret_key"):
+        Settings(_env_file=ENV_EXAMPLE)
 
 
 def test_the_app_connects_with_psycopg_3():
