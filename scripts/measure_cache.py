@@ -21,7 +21,7 @@ from redis import Redis
 
 from app.cache import make_redis
 from app.config import settings
-from app.main import STATS_KEY
+from app.routers.tickets import STATS_KEY
 
 REQUESTS = 200
 

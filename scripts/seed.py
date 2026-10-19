@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.cache import clear_cache, redis_client
 from app.database import SessionLocal, engine
-from app.main import STATS_KEY
+from app.routers.tickets import STATS_KEY
 from app.models import (
     Agent,
     Customer,

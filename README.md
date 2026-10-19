@@ -203,7 +203,7 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 ## Project layout
 
-- `app/`: the API. `main.py` has the endpoints, `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
+- `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
 - `alembic/`: database migrations.
 - `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
 - `tests/`: pytest tests.

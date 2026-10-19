@@ -9,6 +9,10 @@ from app.models import MessageSender, TicketPriority, TicketStatus
 # [0-9] instead of \d, because \d also matches digits from other alphabets.
 E164_PATTERN = r"^\+[1-9][0-9]{1,14}$"
 
+# The largest number a Postgres integer column can hold. No id can be bigger, so no useful
+# skip can be either, and bigger numbers would crash the database call with a 500.
+MAX_INT = 2_147_483_647
+
 
 def reject_nul(value: str) -> str:
     """Reject the NUL character (\\u0000). PostgreSQL can't store it, so saving it would crash."""

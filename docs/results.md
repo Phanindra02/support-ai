@@ -8,7 +8,7 @@ Every number measured in this project, and how it was measured, so each one can 
 
 **Machine.** An Apple M4 Pro with 24 GB of memory, running PostgreSQL 16.15 from Homebrew with default settings: `work_mem` 4 MB, `shared_buffers` 128 MB, and up to 2 parallel workers per query.
 
-**Method.** `uv run python -m scripts.explain_list` runs `EXPLAIN (ANALYZE, BUFFERS)` on the exact query `GET /tickets` builds (`ticket_list_query` in `app/main.py`), with `limit=20`. Each request runs once to warm the cache, then 7 more times, and the table shows the median "Execution Time". That's time inside Postgres only, without the network or Python. Repeated runs differ by about 10%.
+**Method.** `uv run python -m scripts.explain_list` runs `EXPLAIN (ANALYZE, BUFFERS)` on the exact query `GET /tickets` builds (`ticket_list_query` in `app/routers/tickets.py`), with `limit=20`. Each request runs once to warm the cache, then 7 more times, and the table shows the median "Execution Time". That's time inside Postgres only, without the network or Python. Repeated runs differ by about 10%.
 
 ### Before indexes
 

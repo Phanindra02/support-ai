@@ -5,7 +5,9 @@ warning and carry on, and the app answers from Postgres instead of failing.
 """
 
 import logging
+from typing import Annotated
 
+from fastapi import Depends
 from redis import Redis, RedisError
 from redis.backoff import NoBackoff
 from redis.retry import Retry
@@ -36,6 +38,9 @@ redis_client = make_redis(settings.redis_url)
 def get_redis() -> Redis:
     """The Redis client, as a FastAPI dependency, so tests can swap in their own."""
     return redis_client
+
+
+RedisDep = Annotated[Redis, Depends(get_redis)]
 
 
 def read_cache(redis: Redis, key: str) -> str | None:

@@ -27,7 +27,7 @@ uv add <package>                         # add a dependency (never pip install)
 
 ## Layout
 
-- `app/`: the API. `database.py` (engine, SessionLocal, Base, get_db), `models.py` (SQLAlchemy models), `schemas.py` (Pydantic schemas), and `main.py` (endpoints).
+- `app/`: the API. `database.py` (engine, SessionLocal, Base, get_db), `models.py` (SQLAlchemy models), `schemas.py` (Pydantic schemas), `main.py` (creates the app and includes the routers), and `routers/` (the endpoints, one file per area).
 - `worker/`: the RQ background worker (Stage 6).
 - `ml/`: model training and the model service (Stage 7).
 - `lambda/`: the S3-triggered PDF text extraction Lambda (Stage 5).

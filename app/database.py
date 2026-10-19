@@ -1,5 +1,8 @@
+from typing import Annotated
+
+from fastapi import Depends
 from sqlalchemy import Engine, MetaData, create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
 
@@ -46,3 +49,7 @@ def get_db():
     """Give each request its own session, and close it when the request is done."""
     with SessionLocal() as db:
         yield db
+
+
+# Shortcut: any endpoint with a `db: SessionDep` parameter gets its own database session.
+SessionDep = Annotated[Session, Depends(get_db)]

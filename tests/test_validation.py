@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.main import MAX_INT
+from app.schemas import MAX_INT
 from app.models import Customer, Message, MessageSender, Ticket
 
 TEXT_LIMITS = [("customer_name", 100), ("subject", 200), ("message", 5000)]

@@ -93,7 +93,7 @@ Limits are keyed by something that identifies the client: the IP address, a user
 
 ### The stats cache: cache-aside, cleared on every ticket change, with a 60-second expiry
 
-`GET /stats` looks for the key `stats:tickets` in Redis. On a miss, it counts tickets in Postgres and saves the result for 60 seconds. Creating or updating a ticket deletes the key after the database commit, and so does the seed script. The code is in `app/main.py` and `app/cache.py`.
+`GET /stats` looks for the key `stats:tickets` in Redis. On a miss, it counts tickets in Postgres and saves the result for 60 seconds. Creating or updating a ticket deletes the key after the database commit, and so does the seed script. The code is in `app/routers/tickets.py` and `app/cache.py`.
 
 - **Why cache-aside.** The counts are worked out only when someone asks, so nothing is computed while nobody's watching a dashboard. If Redis goes down, the endpoint counts in Postgres instead of failing.
 - **Why not write-through.** Every ticket change would have to recount all tickets as part of the write, whether or not anyone reads the counts, which slows down the path that matters most. Keeping running totals with `INCR` instead would make a second copy of the truth, and it would drift as soon as a change skipped the API, like the seed script or a manual fix in SQL. Deleting and recounting can't drift.

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import event, func, select
 
-from app.main import find_customer, get_or_create_customer
+from app.routers.tickets import find_customer, get_or_create_customer
 from app.models import Customer, Message, MessageSender, Ticket
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
@@ -113,7 +113,7 @@ def test_a_customer_added_by_another_request_mid_lookup_is_reused(session_factor
         # The first lookup ran just before the other request saved the customer.
         return None if len(lookups) == 1 else find_customer(db, phone)
 
-    monkeypatch.setattr("app.main.find_customer", find_customer_that_misses_once)
+    monkeypatch.setattr("app.routers.tickets.find_customer", find_customer_that_misses_once)
 
     with session_factory() as db:
         customer = get_or_create_customer(db, "Jane D.", "+16145550123")
