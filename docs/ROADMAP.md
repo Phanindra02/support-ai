@@ -104,7 +104,7 @@ Done when: one command starts the whole stack in containers, and GitHub Actions 
 
 - [x] Learn containers vs virtual machines, and why config belongs in environment variables.
 - [x] Learn deployment strategies: rolling, blue-green, and canary.
-- [ ] Apply it: write down how to roll back a bad release.
+- [x] Apply it: write down how to roll back a bad release. See `docs/rollback.md`.
 
 ## Stage 5: AWS
 
