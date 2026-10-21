@@ -1,0 +1,15 @@
+# Files Docker may send to a build. Everything is left out except the files listed here,
+# so a new secret or local file can't end up in an image by accident. .env stays out: the
+# settings reach a container as environment variables when it runs.
+*
+
+!pyproject.toml
+!uv.lock
+!alembic.ini
+!alembic/
+!app/
+!scripts/__init__.py
+!scripts/create_agent.py
+
+# Python's caches, inside the folders allowed above.
+**/__pycache__

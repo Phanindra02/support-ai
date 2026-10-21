@@ -92,7 +92,7 @@ Why WhatsApp: plain SMS to US numbers needs A2P 10DLC registration, trial accoun
 
 Done when: one command starts the whole stack in containers, and GitHub Actions tests every push and publishes an image.
 
-- [ ] **[You]** Install Docker Desktop for Mac and start it. Then write a Dockerfile for the API using a slim Python image, uv, and a non-root user.
+- [x] **[You]** Install Docker Desktop for Mac and start it. Then write a Dockerfile for the API using a slim Python image, uv, and a non-root user.
 - [ ] Write a `docker-compose.yml` that starts the API, Postgres, Redis, and n8n with one command.
 - [ ] Move all settings and secrets into the git-ignored `.env`, keep `.env.example` current, and add a `.dockerignore`.
 - [ ] Add a GitHub Actions workflow that runs on every push: install dependencies with uv, lint with ruff, and run pytest.

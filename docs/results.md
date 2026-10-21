@@ -96,3 +96,19 @@ The latency gain is real but small, because Postgres counts 100,000 rows in a fe
 **Behavior.** Against the running API with the default limit of 60, 61 requests from one IP in a few seconds returned 60 `200`s and one `429` with `Retry-After: 60`. The IP's log in Redis then held exactly 60 entries, because the rejected request removed its own entry.
 
 **Cost per request.** Every request now runs one Redis transaction before the endpoint does anything. With the limiter on (`RATE_LIMIT_PER_MINUTE=100000`, so nothing is rejected), `scripts/measure_cache.py` measured cache hits at 0.86 to 0.98 ms at the median over two runs, inside the 0.7 to 1.0 ms measured before the limiter existed. The limiter's cost is too small to see at this precision. Cache misses varied from 8 to 15 ms over the same two runs, which is noise on the machine rather than the limiter, since misses run the same limiter as hits.
+
+## API image size and build time (Stage 4)
+
+**Setup.** `infra/api.Dockerfile`, built with Docker Desktop 29.9.2 on an Apple M4 Pro (24 GB), for linux/arm64. The base image (`python:3.14-slim`) and uv's image were already downloaded.
+
+**Size.** The image saved with `docker save` and gzipped is **92 MB**, close to what a registry stores and a server downloads. Unpacked, the dependencies take 216 MB. The biggest is the Twilio SDK at 51 MB, though the app only uses its signature check and TwiML. Then come SQLAlchemy (29 MB), uvloop (16 MB), and psycopg's bundled libpq (24 MB in all). (`docker image ls` shows 484 MB, but Docker Desktop's figure counts the image both compressed and unpacked.)
+
+**Build time.** Timed with `docker build -q`, on a copy of the project, so the code changes below never touched the real files.
+
+| Build | Time |
+| --- | ---: |
+| No layer cache (`--no-cache`), two runs | 15.2 s, 7.8 s |
+| Nothing changed | 0.7 s |
+| One line of app code changed, three runs | 0.5 to 0.6 s |
+
+The dependencies sit in their own layer, built before any code is copied in. A code change leaves that layer as it was, so Docker only redoes the small code layers. `--no-cache` throws away the layers but not uv's download cache, which is mounted separately, so even those builds didn't download every package again. That cache was empty only before the very first build, which took 18 s.
