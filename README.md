@@ -56,6 +56,7 @@ docker compose exec api python -m scripts.create_agent --email you@example.com -
 
 Then open http://localhost:8000/docs for the API, and http://localhost:5678 for n8n ([set up the workflow](infra/n8n/README.md)).
 
+- **Settings reach the containers as environment variables.** `.env` is never copied into the image, because `.dockerignore` leaves it out, so the same image can run anywhere with different settings. `.env.example` lists every setting, with the secrets left empty.
 - **Migrations run by themselves.** The `migrate` container runs `alembic upgrade head` and exits, and the API waits until it has finished. After pulling new code, `docker compose up --build -d` rebuilds the image and applies any new migrations.
 - **Only the API and n8n are reachable from the Mac,** and only at `127.0.0.1`. Postgres and Redis have no published ports, so they can't clash with the ones from Homebrew. For a database shell: `docker compose exec postgres psql -U support`.
 - **Data lives in volumes.** The `postgres-data` and `n8n-data` volumes survive `docker compose down`. `docker compose down -v` deletes them.

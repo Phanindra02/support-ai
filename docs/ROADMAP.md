@@ -94,7 +94,7 @@ Done when: one command starts the whole stack in containers, and GitHub Actions 
 
 - [x] **[You]** Install Docker Desktop for Mac and start it. Then write a Dockerfile for the API using a slim Python image, uv, and a non-root user.
 - [x] Write a `docker-compose.yml` that starts the API, Postgres, Redis, and n8n with one command.
-- [ ] Move all settings and secrets into the git-ignored `.env`, keep `.env.example` current, and add a `.dockerignore`.
+- [x] Move all settings and secrets into the git-ignored `.env`, keep `.env.example` current, and add a `.dockerignore`. The `.dockerignore` came with the Dockerfile, which needed it.
 - [ ] Add a GitHub Actions workflow that runs on every push: install dependencies with uv, lint with ruff, and run pytest.
 - [ ] Run those tests against a Postgres service container inside the workflow.
 - [ ] On merges to main, build the image on GitHub's ARM runner (`ubuntu-24.04-arm`) and push it to GitHub Container Registry.

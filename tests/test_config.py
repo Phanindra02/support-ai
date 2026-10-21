@@ -17,9 +17,17 @@ COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 # The settings with no default, which the app can't start without.
 REQUIRED = {"DATABASE_URL": URL, "REDIS_URL": REDIS_URL, "JWT_SECRET_KEY": JWT_SECRET_KEY}
 
+# Values that would let someone sign tokens, fake a webhook, or open the database.
+SECRETS = {"JWT_SECRET_KEY", "TWILIO_AUTH_TOKEN", "N8N_WEBHOOK_SECRET", "POSTGRES_PASSWORD"}
+
 
 def env_lines(settings):
     return "".join(f"{name}={value}\n" for name, value in settings.items())
+
+
+def env_example_values():
+    lines = ENV_EXAMPLE.read_text().splitlines()
+    return dict(line.split("=", 1) for line in lines if line.strip() and not line.startswith("#"))
 
 
 @pytest.fixture
@@ -74,11 +82,28 @@ def test_a_short_jwt_secret_is_an_error(no_settings_in_environment, monkeypatch)
 
 
 def test_env_example_lists_every_setting():
-    lines = ENV_EXAMPLE.read_text().splitlines()
-    names = {line.split("=", 1)[0] for line in lines if line.strip() and not line.startswith("#")}
     # The app's settings, plus the ${NAME} values docker compose fills in from .env.
     compose_names = set(re.findall(r"\$\{(\w+)", COMPOSE_FILE.read_text()))
-    assert names == {name.upper() for name in Settings.model_fields} | compose_names
+    expected = {name.upper() for name in Settings.model_fields} | compose_names
+    assert env_example_values().keys() == expected
+
+
+def test_env_example_leaves_every_secret_empty():
+    # Everyone can read .env.example on GitHub.
+    values = env_example_values()
+    assert {name: values[name] for name in SECRETS} == dict.fromkeys(SECRETS, "")
+
+
+def test_env_is_never_committed():
+    assert ".env" in (PROJECT_ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_settings_are_only_read_in_app_config():
+    # Then .env.example, checked against Settings above, names every setting there is.
+    for folder in ["app", "scripts", "alembic"]:
+        for path in (PROJECT_ROOT / folder).rglob("*.py"):
+            if path != PROJECT_ROOT / "app" / "config.py":
+                assert not re.search(r"os\.environ|getenv|load_dotenv", path.read_text()), path
 
 
 def test_env_example_values_load(no_settings_in_environment, monkeypatch):

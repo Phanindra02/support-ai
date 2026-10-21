@@ -55,7 +55,9 @@ async def verify_twilio_signature(request: Request) -> None:
     validator = RequestValidator(settings.twilio_auth_token)
     # The URL must be the public one Twilio called. Behind ngrok (or later, Caddy), the host
     # comes from the Host header the proxy passes on, and uvicorn takes the https scheme from
-    # the proxy's X-Forwarded-Proto header, which it trusts from 127.0.0.1.
+    # the proxy's X-Forwarded-Proto header. It only trusts that header from the addresses in
+    # FORWARDED_ALLOW_IPS: 127.0.0.1 by default, and the Docker network's gateway in
+    # docker-compose.yml.
     # Twilio sends plain text fields. A file upload can't be signed, and would crash the
     # check, so it fails it instead.
     valid = all(isinstance(value, str) for _, value in form.multi_items()) and (
