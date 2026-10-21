@@ -1,8 +1,13 @@
-# Lints and tests every push, to any branch.
+# Lints and tests every push, to any branch, then builds the API's image. Pushes to main also
+# publish the image to GitHub Container Registry.
 name: CI
 
 on:
   push:
+
+# The token GitHub gives each job can only read the repo, unless a job asks for more.
+permissions:
+  contents: read
 
 jobs:
   lint:
@@ -65,3 +70,79 @@ jobs:
       - name: Make a JWT secret for this run
         run: echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - run: uv run pytest
+
+  image:
+    # Only once lint and the tests pass, so a broken commit never becomes an image.
+    needs: [lint, test]
+    # An ARM machine, like the Mac and AWS Graviton, so the image is built for the CPU it
+    # runs on, without emulation.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write # to push to GitHub Container Registry
+    env:
+      # Registry names must be lowercase, so this can't come from github.repository_owner.
+      IMAGE: ghcr.io/phanindra02/support-ai-api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      # Built on every branch, so a broken Dockerfile shows up before it reaches main. The
+      # layers are cached in GitHub Actions' cache, so unchanged ones aren't rebuilt. There
+      # are no build args: settings and secrets only reach a container when it runs.
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/api.Dockerfile
+          load: true
+          tags: support-ai-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Postgres and Redis aren't needed for this: the app starts without them, and GET /
+      # skips the rate limit when Redis is down.
+      - name: Check that the image runs, and not as root
+        run: |
+          test "$(docker run --rm support-ai-api:ci id -u)" != 0
+          docker run -d --name api -p 8000:8000 \
+            -e DATABASE_URL=postgresql+psycopg://nobody@localhost/none \
+            -e REDIS_URL=redis://localhost:1/0 \
+            -e JWT_SECRET_KEY="$(openssl rand -hex 32)" \
+            support-ai-api:ci
+          curl --fail --silent --show-error --retry 20 --retry-all-errors --retry-delay 1 \
+            http://localhost:8000/
+          docker rm -f api
+
+      # From here on, only for pushes to main, which is what a merged pull request is.
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two tags: sha-<commit> never changes, so a deploy or rollback can name an exact build,
+      # and latest moves to each new build. The labels link the image to this repo on GitHub.
+      - name: Choose tags and labels
+        if: github.ref == 'refs/heads/main'
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      # The same build as above, so every layer comes from the cache.
+      - name: Push the image
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/api.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

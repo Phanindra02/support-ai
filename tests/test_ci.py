@@ -78,3 +78,45 @@ def test_no_jwt_secret_is_written_in_the_workflow(jobs):
     # It's made fresh on each run, so the repo holds no key anyone could sign tokens with.
     assert "JWT_SECRET_KEY" not in jobs["test"]["env"]
     assert any("openssl rand" in command for command in commands(jobs["test"]))
+
+
+def image_steps(jobs):
+    return [step for step in jobs["image"]["steps"] if "build-push-action" in step.get("uses", "")]
+
+
+def test_an_image_is_only_built_after_lint_and_the_tests_pass(jobs):
+    assert set(jobs["image"]["needs"]) == {"lint", "test"}
+
+
+def test_the_image_is_built_on_arm(jobs):
+    # The Mac and AWS Graviton are ARM too.
+    assert jobs["image"]["runs-on"].endswith("-arm")
+
+
+def test_only_pushes_to_main_publish_the_image(jobs):
+    for step in jobs["image"]["steps"]:
+        publishes = step.get("with", {}).get("push") is True or "login-action" in step.get("uses", "")
+        if publishes:
+            assert step["if"] == "github.ref == 'refs/heads/main'"
+
+
+def test_only_the_image_job_may_write_packages(workflow, jobs):
+    assert workflow["permissions"] == {"contents": "read"}
+    for name, job in jobs.items():
+        if name != "image":
+            assert "permissions" not in job
+
+
+def test_no_build_args_go_into_the_image(jobs):
+    # The repo and its image are public. Anything passed as a build arg is stored in the image.
+    for step in image_steps(jobs):
+        assert "build-args" not in step["with"]
+        assert "secrets" not in step["with"]
+    dockerfile = (PROJECT_ROOT / "infra" / "api.Dockerfile").read_text()
+    assert not re.search(r"^\s*ARG\b", dockerfile, re.MULTILINE)
+
+
+def test_the_published_image_is_built_from_the_dockerfile(jobs):
+    for step in image_steps(jobs):
+        assert step["with"]["file"] == "infra/api.Dockerfile"
+        assert step["with"]["context"] == "."
