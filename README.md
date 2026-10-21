@@ -259,6 +259,8 @@ When an agent changes a ticket's priority to `urgent`, the API posts the ticket 
 - If n8n is down or answers with an error, the update still succeeds, and a warning is logged. Nothing retries yet. Stage 6's job queue can.
 - The customer's phone number is left out. The channel doesn't need it.
 
+To run n8n, connect Slack, and import the workflow, follow [infra/n8n/README.md](infra/n8n/README.md).
+
 ### Status codes
 
 | Code | When |
