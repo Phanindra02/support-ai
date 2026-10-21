@@ -103,7 +103,7 @@ Done when: one command starts the whole stack in containers, and GitHub Actions 
 ### System design
 
 - [x] Learn containers vs virtual machines, and why config belongs in environment variables.
-- [ ] Learn deployment strategies: rolling, blue-green, and canary.
+- [x] Learn deployment strategies: rolling, blue-green, and canary.
 - [ ] Apply it: write down how to roll back a bad release.
 
 ## Stage 5: AWS
