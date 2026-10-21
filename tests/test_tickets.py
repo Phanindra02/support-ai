@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import event, func, select
 
-from app.routers.tickets import find_customer, get_or_create_customer
 from app.models import Customer, Message, MessageSender, Ticket
+from app.routers.tickets import find_customer, get_or_create_customer
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
 

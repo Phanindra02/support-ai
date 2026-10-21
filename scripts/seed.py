@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from app.cache import clear_cache, redis_client
 from app.database import SessionLocal, engine
-from app.routers.tickets import STATS_KEY
 from app.models import (
     Agent,
     Customer,
@@ -30,6 +29,7 @@ from app.models import (
     TicketPriority,
     TicketStatus,
 )
+from app.routers.tickets import STATS_KEY
 from app.schemas import TicketCreate
 
 WEEKS = 12
@@ -89,16 +89,22 @@ PRODUCTS = [
 TOPICS = [
     (
         "Where is my order?",
-        "I ordered the {product} on {date} and it still hasn't arrived. The tracking page "
-        "hasn't changed in days. My order number is {order}.",
-        "Sorry for the wait. I checked with the carrier, and order {order} is moving again. "
-        "It should reach you within two business days.",
+        (
+            "I ordered the {product} on {date} and it still hasn't arrived. The tracking page "
+            "hasn't changed in days. My order number is {order}."
+        ),
+        (
+            "Sorry for the wait. I checked with the carrier, and order {order} is moving again. "
+            "It should reach you within two business days."
+        ),
     ),
     (
         "Refund for order {order}",
         "I sent the {product} back two weeks ago but haven't seen a refund yet. Can you check?",
-        "Thanks for your patience. Your refund for order {order} has been issued, and it should "
-        "show on your card in 3 to 5 business days.",
+        (
+            "Thanks for your patience. Your refund for order {order} has been issued, and it should "
+            "show on your card in 3 to 5 business days."
+        ),
     ),
     (
         "Charged twice",
@@ -107,22 +113,30 @@ TOPICS = [
     ),
     (
         "Can't log in",
-        "I've tried to reset my password three times, but the email never arrives. My account "
-        "email is {email}.",
-        "Sorry about that. I've sent a new reset link to {email}. If it isn't in your inbox, "
-        "please check your spam folder.",
+        (
+            "I've tried to reset my password three times, but the email never arrives. My account "
+            "email is {email}."
+        ),
+        (
+            "Sorry about that. I've sent a new reset link to {email}. If it isn't in your inbox, "
+            "please check your spam folder."
+        ),
     ),
     (
         "My {product} arrived damaged",
         "The box was crushed and the {product} inside is broken. I'd like a replacement.",
-        "I'm sorry it arrived broken. A replacement {product} ships today, and you don't need "
-        "to send the damaged one back.",
+        (
+            "I'm sorry it arrived broken. A replacement {product} ships today, and you don't need "
+            "to send the damaged one back."
+        ),
     ),
     (
         "Wrong item delivered",
         "I ordered the {product} but got something else. Order number {order}.",
-        "Sorry for the mix-up. The {product} is on its way, and a prepaid return label for the "
-        "wrong item is in your email.",
+        (
+            "Sorry for the mix-up. The {product} is on its way, and a prepaid return label for the "
+            "wrong item is in your email."
+        ),
     ),
     (
         "Change my delivery address",
@@ -131,8 +145,10 @@ TOPICS = [
     ),
     (
         "Cancel my subscription",
-        "Please cancel my subscription before the next billing date. I'm being charged "
-        "${amount} a month and don't use it anymore.",
+        (
+            "Please cancel my subscription before the next billing date. I'm being charged "
+            "${amount} a month and don't use it anymore."
+        ),
         "Your subscription is canceled, and you won't be charged again.",
     ),
     (
@@ -143,13 +159,17 @@ TOPICS = [
     (
         "App keeps crashing",
         "The app crashes every time I open my order history. I'm on the latest version.",
-        "Thanks for reporting this. A fix is coming in the next app update. Until then, "
-        "reinstalling the app stops the crash.",
+        (
+            "Thanks for reporting this. A fix is coming in the next app update. Until then, "
+            "reinstalling the app stops the crash."
+        ),
     ),
     (
         "Discount code not working",
-        "The code {code} says it's invalid at checkout, but your email said it works until "
-        "the end of the month.",
+        (
+            "The code {code} says it's invalid at checkout, but your email said it works until "
+            "the end of the month."
+        ),
         "Sorry about that. The code {code} works again, and I've extended it by a week.",
     ),
 ]

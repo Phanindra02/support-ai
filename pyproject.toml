@@ -29,9 +29,24 @@ dev = [
     "pandas>=3.0.6",
     "pytest>=9.1.1",
     "pyyaml>=6.0.3",
+    "ruff>=0.17.1",
 ]
 
 [tool.pytest.ini_options]
 # The project isn't installed as a package, so this lets tests import app from the project root.
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The code is written to 100 columns.
+line-length = 100
+
+[tool.ruff.lint]
+# Ruff's default rules, minus UP017, which would turn timezone.utc into datetime.UTC.
+# The project writes datetime.now(timezone.utc) (see CLAUDE.md).
+ignore = ["UP017"]
+
+[tool.ruff.lint.isort]
+# The alembic/ folder holds migrations, not the alembic library, which `from alembic import op`
+# means. Without this, ruff would sort that import in with the project's own.
+known-third-party = ["alembic"]

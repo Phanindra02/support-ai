@@ -9,7 +9,7 @@ Create Date: 2026-10-19 15:50:14.706039
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -17,9 +17,9 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "fb46acf95786"
-down_revision: Union[str, Sequence[str], None] = "89711c13eabd"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "89711c13eabd"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # create_type=False, because the type is created and dropped below, by hand. Adding or
 # dropping a column doesn't do that by itself, and a type left behind would make the

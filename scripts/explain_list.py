@@ -17,8 +17,8 @@ from statistics import median
 from sqlalchemy import Connection, text
 
 from app.database import engine
-from app.routers.tickets import ticket_list_query
 from app.models import TicketPriority, TicketStatus
+from app.routers.tickets import ticket_list_query
 
 RUNS = 7
 

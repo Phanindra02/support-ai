@@ -6,16 +6,16 @@ Create Date: 2026-10-18 18:41:55.839196
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "086e8c9716c3"
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # The values are written out instead of imported from app.models. A migration is a snapshot
 # of one moment, and it must keep doing the same thing after the models change.

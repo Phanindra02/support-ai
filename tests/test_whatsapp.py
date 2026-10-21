@@ -335,7 +335,7 @@ def test_messages_sent_at_once_by_one_customer_share_a_ticket(client, session_fa
 
     assert results and results[0].status_code == 200
     # The waiting request found the ticket the other one opened, instead of opening a third.
-    closed, shared = all_tickets(session_factory)
+    _closed, shared = all_tickets(session_factory)
     assert shared["subject"] == "Opened by the other request"
     assert shared["messages"] == [(MessageSender.customer, "Second message")]
 
@@ -350,10 +350,11 @@ def replies(response):
 
 def test_a_message_that_opens_a_ticket_gets_a_confirmation(client):
     response = send(client, "Where is my order?")
-    assert replies(response) == [
+    expected = (
         "Thanks, we got your message. Your ticket number is 1, "
         "and someone from our team will reply here soon."
-    ]
+    )
+    assert replies(response) == [expected]
 
 
 def test_later_messages_on_the_same_ticket_get_no_reply(client):
@@ -499,7 +500,7 @@ def test_a_repeat_that_arrives_while_the_first_is_saving_waits_for_it(client, se
 
     # The repeat found the stored message, instead of saving it again and failing with a 500.
     assert results and "Your ticket number is 2," in replies(results[0])[0]
-    closed, new = all_tickets(session_factory)
+    _closed, new = all_tickets(session_factory)
     assert new["messages"] == [(MessageSender.customer, "New problem")]
 
 

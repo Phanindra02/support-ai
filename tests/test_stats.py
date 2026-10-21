@@ -3,8 +3,8 @@
 import logging
 import time
 
-from app.routers.tickets import STATS_CACHE_SECONDS, STATS_KEY
 from app.models import Customer, Ticket, TicketPriority, TicketStatus
+from app.routers.tickets import STATS_CACHE_SECONDS, STATS_KEY
 from scripts.seed import main
 
 ZERO_STATS = {

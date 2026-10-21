@@ -75,10 +75,10 @@ def get_or_create_customer(db: Session, name: str, phone: str) -> Customer:
         with db.begin_nested():
             customer = Customer(name=name, phone=phone)
             db.add(customer)
-    except IntegrityError as exc:
+    except IntegrityError:
         customer = find_customer(db, phone)
         if customer is None:
-            raise exc
+            raise
     return customer
 
 

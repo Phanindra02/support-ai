@@ -50,7 +50,9 @@ class Customer(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    tickets: Mapped[list["Ticket"]] = relationship(back_populates="customer")
+    # Ticket is defined further down. Python 3.14 only reads an annotation when something
+    # asks for it (PEP 649), and SQLAlchemy asks once every model exists, so no quotes needed.
+    tickets: Mapped[list[Ticket]] = relationship(back_populates="customer")
 
 
 class Agent(Base):
@@ -77,7 +79,7 @@ class Agent(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    tickets: Mapped[list["Ticket"]] = relationship(back_populates="agent")
+    tickets: Mapped[list[Ticket]] = relationship(back_populates="agent")
 
 
 class Ticket(Base):
@@ -111,7 +113,7 @@ class Ticket(Base):
 
     customer: Mapped[Customer] = relationship(back_populates="tickets")
     agent: Mapped[Agent | None] = relationship(back_populates="tickets")
-    messages: Mapped[list["Message"]] = relationship(back_populates="ticket")
+    messages: Mapped[list[Message]] = relationship(back_populates="ticket")
 
 
 class Message(Base):

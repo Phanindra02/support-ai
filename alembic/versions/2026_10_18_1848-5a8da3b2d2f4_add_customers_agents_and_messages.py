@@ -9,16 +9,16 @@ Create Date: 2026-10-18 18:48:57.639790
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "5a8da3b2d2f4"
-down_revision: Union[str, Sequence[str], None] = "086e8c9716c3"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "086e8c9716c3"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 message_sender = sa.Enum("customer", "agent", "bot", name="messagesender")
 
