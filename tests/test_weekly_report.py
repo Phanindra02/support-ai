@@ -55,8 +55,8 @@ def test_open_tickets_are_counted_at_the_end_of_each_week(two_weeks):
     report = build_report(two_weeks, NOW)
     # Columns: low, medium, high, urgent, total. The low ticket was still open when week 1
     # ended, because it closed on the Monday of week 2.
-    assert report.loc[0, [*OPEN_COLUMNS, "open_total"]].tolist() == [1, 0, 0, 1, 2]
-    assert report.loc[1, [*OPEN_COLUMNS, "open_total"]].tolist() == [0, 1, 0, 1, 2]
+    assert report.iloc[0][[*OPEN_COLUMNS, "open_total"]].tolist() == [1, 0, 0, 1, 2]
+    assert report.iloc[1][[*OPEN_COLUMNS, "open_total"]].tolist() == [0, 1, 0, 1, 2]
 
 
 def test_a_week_with_no_tickets_still_gets_a_row():
@@ -73,10 +73,10 @@ def test_a_week_with_no_tickets_still_gets_a_row():
         "2026-10-12",
     ]
     quiet_week = report.loc[1]
-    assert quiet_week["tickets_created"] == 0
-    assert quiet_week["tickets_closed"] == 0
-    assert pd.isna(quiet_week["avg_hours_to_close"])
-    assert quiet_week["open_low"] == 1
+    assert quiet_week["tickets_created"].item() == 0
+    assert quiet_week["tickets_closed"].item() == 0
+    assert pd.isna(quiet_week["avg_hours_to_close"].item())
+    assert quiet_week["open_low"].item() == 1
 
 
 def test_no_tickets_gives_an_empty_report():
