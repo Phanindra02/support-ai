@@ -37,6 +37,7 @@ Other commands:
 
 ```bash
 uv run pytest                            # run the tests on support_test, never the app's database
+uv run ruff check .                      # lint, as CI does
 uv run python -m scripts.seed            # add 1,000 realistic fake tickets (--reset deletes every agent too)
 uv run python -m scripts.weekly_report   # save a weekly report to reports/weekly_report.csv
 uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANALYZE (seed 100,000 first)
@@ -70,6 +71,15 @@ docker compose down                      # stop and remove the containers, keepi
 ```
 
 The image can also be built on its own: `docker build -f infra/api.Dockerfile -t support-ai-api .`
+
+## CI
+
+Every push, to any branch, runs [.github/workflows/ci.yml](.github/workflows/ci.yml) on GitHub Actions:
+
+- **lint** runs `uv run ruff check .`.
+- **test** runs `uv run pytest`, against Postgres 16 and Redis 8 started as service containers next to the job. Each run makes its own random `JWT_SECRET_KEY`.
+
+Both install with `uv sync --locked`, which fails if `uv.lock` is out of date, and use the same uv version as the Mac and the Dockerfile. To run the same checks before pushing: `uv run ruff check . && uv run pytest`.
 
 ## API
 

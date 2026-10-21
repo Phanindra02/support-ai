@@ -1,0 +1,67 @@
+# Lints and tests every push, to any branch.
+name: CI
+
+on:
+  push:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The same uv as on the Mac and in infra/api.Dockerfile. It also caches downloaded
+      # packages between runs, keyed on uv.lock.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.2"
+      # --locked fails if uv.lock is out of date with pyproject.toml, instead of updating it.
+      - run: uv sync --locked
+      - run: uv run ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    # Postgres and Redis run as containers next to the job, reachable on localhost. The job
+    # waits until both pass their health checks.
+    services:
+      postgres:
+        # The same major version as on the Mac and in docker-compose.yml.
+        image: postgres:16
+        env:
+          # A throwaway database that only exists for this run, so the password isn't a secret.
+          POSTGRES_USER: support
+          POSTGRES_PASSWORD: support
+          POSTGRES_DB: support_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U support -d support_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+      redis:
+        image: redis:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    # The settings that .env holds on the Mac. The tests only use the TEST_ ones, but the app
+    # won't start without DATABASE_URL and REDIS_URL, and the tests refuse to run if the two
+    # pairs match.
+    env:
+      DATABASE_URL: postgresql+psycopg://support:support@localhost:5432/support
+      TEST_DATABASE_URL: postgresql+psycopg://support:support@localhost:5432/support_test
+      REDIS_URL: redis://localhost:6379/0
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.2"
+      - run: uv sync --locked
+      # A new random key for every run, so no key is written in the repo for anyone to copy.
+      - name: Make a JWT secret for this run
+        run: echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: uv run pytest
