@@ -123,6 +123,10 @@ class Message(Base):
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), index=True)
     sender: Mapped[MessageSender] = mapped_column(Enum(MessageSender, validate_strings=True))
     body: Mapped[str] = mapped_column(Text)
+    # Twilio's id for a message that came in on WhatsApp, like SM followed by 32 hex digits.
+    # Twilio can deliver a message more than once, and unique means it's stored only once.
+    # Empty for every other message. Postgres lets any number of rows leave it empty.
+    twilio_sid: Mapped[str | None] = mapped_column(String(34), unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

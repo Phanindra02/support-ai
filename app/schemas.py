@@ -263,6 +263,9 @@ class WhatsAppMessage(BaseModel):
     The signature check has already proved the request came from Twilio.
     """
 
+    # Twilio's id for this message, the same on every delivery of it. Twilio's ids are 34
+    # letters and digits. Checked loosely, since a real message turned away is lost.
+    message_sid: Annotated[str, Field(alias="MessageSid", pattern=r"^[A-Za-z0-9]{1,34}$")]
     # The customer: "whatsapp:" and their number in E.164, like whatsapp:+16145550123.
     sender: Annotated[str, Field(alias="From", pattern=r"^whatsapp:\+[1-9][0-9]{1,14}$")]
     # Empty when the customer sent only a photo, file, or location.

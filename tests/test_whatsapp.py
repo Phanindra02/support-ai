@@ -4,6 +4,7 @@ the same way Twilio does, so no Twilio account or network is needed."""
 import json
 import time
 from threading import Thread
+from uuid import uuid4
 from xml.etree import ElementTree
 
 import pytest
@@ -13,7 +14,7 @@ from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 
 from app.config import settings
-from app.models import Customer, MessageSender, Ticket, TicketPriority, TicketStatus
+from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
 from app.routers.tickets import STATS_KEY
 
 AUTH_TOKEN = "made-up-twilio-auth-token-for-tests"
@@ -32,15 +33,30 @@ def client(anonymous_client):
     return anonymous_client
 
 
+@pytest.fixture
+def agent_client(test_app, make_agent, auth_header):
+    """An agent working the tickets, next to Twilio's client, which isn't logged in."""
+    agent = make_agent(name="Ada Lovelace", email="ada@example.com")
+    return TestClient(test_app, headers=auth_header(agent))
+
+
 def sign(form, url=URL, token=AUTH_TOKEN):
     """The X-Twilio-Signature header Twilio would send with this form."""
     return RequestValidator(token).compute_signature(url, form)
 
 
+def new_message_sid():
+    """An id like the ones Twilio gives each message: SM and 32 hex digits."""
+    return "SM" + uuid4().hex
+
+
 def whatsapp_form(**fields):
-    """The form Twilio posts for one WhatsApp message (most of its fields, not all)."""
+    """The form Twilio posts for one WhatsApp message (most of its fields, not all).
+
+    Each call is a new message, with its own MessageSid, unless one is passed in.
+    """
     return {
-        "MessageSid": "SM" + "0" * 31 + "1",
+        "MessageSid": new_message_sid(),
         "AccountSid": "AC" + "0" * 32,
         "From": "whatsapp:+16145550123",
         "To": "whatsapp:+14155238886",
@@ -368,14 +384,140 @@ def test_text_in_the_reply_is_escaped_for_xml(client):
     ]
 
 
+# Repeat deliveries. Twilio can send the same message more than once, with the same MessageSid.
+
+
+def deliver(client, form):
+    """Deliver this exact form, as Twilio does each time it sends a message again."""
+    response = post_from_twilio(client, form)
+    assert response.status_code == 200, response.text
+    return response
+
+
+def test_a_repeat_delivery_stores_nothing_and_gets_the_same_reply(client, session_factory):
+    form = whatsapp_form(Body="Where is my order?")
+    first = deliver(client, form)
+    repeat = deliver(client, form)
+
+    # The confirmation again, since Twilio only repeats a delivery when it didn't use the reply.
+    assert repeat.text == first.text
+    assert "Your ticket number is 1," in replies(repeat)[0]
+    [ticket] = all_tickets(session_factory)
+    assert ticket["messages"] == [(MessageSender.customer, "Where is my order?")]
+
+
+def test_a_repeat_of_a_later_message_gets_no_reply_either(client, session_factory):
+    send(client, "Where is my order?")
+    form = whatsapp_form(Body="It's order 1234.")
+    deliver(client, form)
+
+    assert deliver(client, form).text == EMPTY_TWIML
+    [ticket] = all_tickets(session_factory)
+    assert len(ticket["messages"]) == 2
+
+
+def test_a_repeat_after_the_ticket_closed_opens_no_new_ticket(client, session_factory):
+    form = whatsapp_form()
+    deliver(client, form)
+    with session_factory() as db:
+        db.get(Ticket, 1).status = TicketStatus.closed
+        db.commit()
+
+    # Without the check, the repeat would look like a new message and open ticket 2.
+    repeat = deliver(client, form)
+
+    assert "Your ticket number is 1," in replies(repeat)[0]
+    [ticket] = all_tickets(session_factory)
+    assert ticket["status"] == TicketStatus.closed
+
+
+def test_a_repeat_leaves_a_pending_ticket_pending(client, session_factory):
+    send(client)
+    form = whatsapp_form(Body="Here's the photo you asked for.")
+    deliver(client, form)
+    with session_factory() as db:
+        db.get(Ticket, 1).status = TicketStatus.pending  # The team answered the photo.
+        db.commit()
+
+    deliver(client, form)
+
+    [ticket] = all_tickets(session_factory)
+    assert ticket["status"] == TicketStatus.pending
+
+
+def test_the_same_text_in_two_messages_is_kept_twice(client, session_factory):
+    # Repeats are found by Twilio's id, not by text. A customer can send "Hello?" twice.
+    send(client, "Hello?")
+    send(client, "Hello?")
+    [ticket] = all_tickets(session_factory)
+    assert [body for _, body in ticket["messages"]] == ["Hello?", "Hello?"]
+
+
+def test_only_whatsapp_messages_have_a_twilio_id(
+    client, agent_client, session_factory, ticket_data
+):
+    form = whatsapp_form()
+    deliver(client, form)
+    # Any number of messages can have none, despite the unique constraint.
+    for _ in range(2):
+        assert agent_client.post("/tickets", json=ticket_data).status_code == 201
+
+    with session_factory() as db:
+        ids = db.scalars(select(Message.twilio_sid).order_by(Message.id)).all()
+    assert ids == [form["MessageSid"], None, None]
+
+
+def test_a_repeat_that_arrives_while_the_first_is_saving_waits_for_it(client, session_factory):
+    send(client, "First message")
+    with session_factory() as db:
+        db.get(Ticket, 1).status = TicketStatus.closed
+        db.commit()
+    form = whatsapp_form(Body="New problem")
+
+    # The first delivery of form is half done: it holds the lock on the customer's row, and
+    # has opened ticket 2 with the message, but hasn't committed yet.
+    with session_factory() as first_delivery:
+        customer = first_delivery.scalar(select(Customer).with_for_update())
+        ticket = Ticket(customer=customer, subject="New problem")
+        first_delivery.add(
+            Message(
+                ticket=ticket,
+                sender=MessageSender.customer,
+                body="New problem",
+                twilio_sid=form["MessageSid"],
+            )
+        )
+        first_delivery.flush()
+        results = []
+        thread = Thread(target=lambda: results.append(deliver(client, form)))
+        thread.start()
+        time.sleep(0.5)
+        assert thread.is_alive(), "The repeat should wait for the lock"
+
+        first_delivery.commit()  # Releases the lock.
+        thread.join(timeout=5)
+
+    # The repeat found the stored message, instead of saving it again and failing with a 500.
+    assert results and "Your ticket number is 2," in replies(results[0])[0]
+    closed, new = all_tickets(session_factory)
+    assert new["messages"] == [(MessageSender.customer, "New problem")]
+
+
+@pytest.mark.parametrize("sid", ["", "SM" + "0" * 40, "SM\x00abc", "SM-1234"])
+def test_a_bad_message_id_gets_a_422_not_a_500(client, session_factory, sid):
+    response = post_from_twilio(client, whatsapp_form(MessageSid=sid))
+    assert response.status_code == 422
+    assert all_tickets(session_factory) == []
+
+
+def test_a_message_without_an_id_gets_a_422(client, session_factory):
+    form = whatsapp_form()
+    del form["MessageSid"]
+    assert post_from_twilio(client, form).status_code == 422
+    assert all_tickets(session_factory) == []
+
+
 # From WhatsApp to Slack, with Twilio and n8n both faked
-
-
-@pytest.fixture
-def agent_client(test_app, make_agent, auth_header):
-    """An agent working the tickets, next to Twilio's client, which isn't logged in."""
-    agent = make_agent(name="Ada Lovelace", email="ada@example.com")
-    return TestClient(test_app, headers=auth_header(agent))
 
 
 def test_a_whatsapp_ticket_marked_urgent_reaches_slack(client, agent_client, n8n, monkeypatch):

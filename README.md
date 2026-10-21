@@ -238,6 +238,7 @@ Each message becomes part of a ticket:
 - **A reply to a pending ticket** makes it open again. Pending means the team is waiting on the customer, so once they answer, it's the team's turn.
 - **Messages sent at once** by the same customer land on one ticket. Each request locks the customer's row (`SELECT ... FOR UPDATE`) while it works, so a second message waits for the first instead of opening a second ticket.
 - A message with no text, such as a photo, is stored as a note saying so. Media isn't saved yet.
+- **A repeat delivery changes nothing.** Twilio can send the same message twice, with the same `MessageSid`, such as when it gave up waiting for the first response. Each stored message keeps its `MessageSid` in a unique column, so a repeat isn't stored again, doesn't reopen a ticket or open a new one, and gets the same reply as the first delivery. Twilio only repeats a delivery when it didn't use the first reply.
 - **A message that opens a ticket gets a reply:** "Thanks, we got your message. Your ticket number is 42, and someone from our team will reply here soon." The reply goes back in the response as TwiML, so Twilio sends it without another API call. Later messages on the same ticket get no reply, so a customer who sends five short messages isn't sent five confirmations.
 
 - **Only Twilio can call it.** Twilio signs each request with the account's auth token, in the `X-Twilio-Signature` header. A request with a missing or wrong signature gets a `403`. Until `TWILIO_AUTH_TOKEN` is set in `.env`, every request gets a `503`.

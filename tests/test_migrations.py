@@ -16,6 +16,8 @@ CREATE_TICKETS = "086e8c9716c3"
 ADD_CUSTOMERS = "5a8da3b2d2f4"
 INDEX_TICKETS = "a8dd85a3d297"
 ADD_AGENT_PASSWORDS = "89711c13eabd"
+ADD_AGENT_ROLES = "fb46acf95786"
+ADD_TWILIO_SIDS = "54c6c062563f"
 
 
 @pytest.fixture
@@ -146,4 +148,28 @@ def test_agents_already_in_the_table_get_no_password_and_stay_active(empty_datab
     # No one can log in as an existing agent until a password is set for them.
     assert rows(empty_database, "SELECT email, password_hash, is_active FROM agents") == [
         ("sam.lee@example.com", None, True)
+    ]
+
+
+def test_messages_already_in_the_table_get_no_twilio_id(empty_database, migrate):
+    migrate(empty_database, command.upgrade, ADD_AGENT_ROLES)
+    with empty_database.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO customers (name, phone) VALUES ('Jane Doe', '+16145550123');
+                INSERT INTO tickets (customer_id, subject, status, priority)
+                    VALUES (1, 'Order late', 'open', 'medium');
+                INSERT INTO messages (ticket_id, sender, body) VALUES
+                    (1, 'customer', 'Where is my order?'), (1, 'agent', 'It ships today.');
+                """
+            )
+        )
+
+    migrate(empty_database, command.upgrade, ADD_TWILIO_SIDS)
+
+    # Both are left empty, which the unique constraint allows for any number of rows.
+    assert rows(empty_database, "SELECT body, twilio_sid FROM messages ORDER BY id") == [
+        ("Where is my order?", None),
+        ("It ships today.", None),
     ]

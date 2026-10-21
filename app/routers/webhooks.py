@@ -12,7 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
@@ -103,10 +103,23 @@ def find_open_ticket(db: Session, customer: Customer) -> Ticket | None:
     )
 
 
+def opened_its_ticket(db: Session, message: Message) -> bool:
+    """Whether a stored message is the one that opened its ticket.
+
+    Every way a ticket opens, POST /tickets or this webhook, saves its first message with it,
+    so the message that opened a ticket is the ticket's first.
+    """
+    first_id = db.scalar(
+        select(func.min(Message.id)).where(Message.ticket_id == message.ticket_id)
+    )
+    return first_id == message.id
+
+
 def add_to_ticket(db: Session, message: WhatsAppMessage) -> tuple[Ticket, bool]:
     """Add a customer's message to their open ticket, or open a new ticket with it.
 
-    Also says whether the ticket is new.
+    Also says whether the message opened the ticket, which decides the reply. A message
+    that's already stored changes nothing, and gets the same answer as the first time.
     """
     # A customer without a WhatsApp profile name goes by their number until an agent knows more.
     name = message.profile_name.strip()[:100] or message.phone
@@ -117,6 +130,13 @@ def add_to_ticket(db: Session, message: WhatsAppMessage) -> tuple[Ticket, bool]:
     # requests could both find no open ticket, and open two. With it, the second waits, then
     # finds the ticket the first one opened.
     db.refresh(customer, with_for_update=True)
+
+    # Twilio sometimes delivers a message twice, such as when it gave up waiting for the
+    # first response. Checked after the lock, so a repeat that arrives while the first is
+    # still being saved waits for it, then finds it, instead of saving it again.
+    stored = db.scalar(select(Message).where(Message.twilio_sid == message.message_sid))
+    if stored is not None:
+        return stored.ticket, opened_its_ticket(db, stored)
 
     ticket = find_open_ticket(db, customer)
     is_new = ticket is None
@@ -130,7 +150,14 @@ def add_to_ticket(db: Session, message: WhatsAppMessage) -> tuple[Ticket, bool]:
 
     # Setting message.ticket, rather than appending to ticket.messages, avoids loading every
     # earlier message in the conversation just to add one.
-    db.add(Message(ticket=ticket, sender=MessageSender.customer, body=message.body or NO_TEXT))
+    db.add(
+        Message(
+            ticket=ticket,
+            sender=MessageSender.customer,
+            body=message.body or NO_TEXT,
+            twilio_sid=message.message_sid,
+        )
+    )
     return ticket, is_new
 
 
@@ -147,6 +174,9 @@ def receive_whatsapp_message(
     The customer is found by phone number, or added. The message joins their open ticket, or
     opens a new one if they have none. A new ticket gets a confirmation reply, which Twilio
     sends to the customer on WhatsApp.
+
+    A message Twilio delivers again isn't stored again. It gets the same reply as the first
+    delivery, because Twilio only repeats a delivery when it didn't use the first reply.
     """
     ticket, is_new = add_to_ticket(db, message)
     db.commit()
