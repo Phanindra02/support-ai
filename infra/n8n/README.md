@@ -17,13 +17,16 @@ The file holds no secrets. n8n keeps credentials in its own encrypted database, 
 
 ## Set it up
 
-You need Node.js (n8n runs on it) and a Slack workspace where you can add apps.
+You need a Slack workspace where you can add apps, and either Docker or Node.js to run n8n.
 
-1. **Start n8n.** It opens at http://localhost:5678. The first time, it asks you to create an owner account, which only exists on your Mac.
+1. **Start n8n.** It opens at http://localhost:5678. The first time, it asks you to create an owner account, which only exists on your Mac. Use one of these, not both, since they share the port:
 
    ```bash
-   npx n8n
+   docker compose up -d n8n                 # in a container, as part of the stack (see the main README)
+   npx n8n                                  # or on the Mac itself, with Node.js
    ```
+
+   The container keeps its data in the `n8n-data` volume, and `npx n8n` keeps its own in `~/.n8n`, so each needs its own setup. To move from `npx n8n` to the container without setting it up again, see [Move from npx n8n to Docker](#move-from-npx-n8n-to-docker).
 
    If npx fails with `EACCES` or `EEXIST` under `~/.npm/_cacache`, an earlier `sudo npm` left root-owned files in npm's cache. Give them back to yourself, then run `npx n8n` again:
 
@@ -55,6 +58,21 @@ You need Node.js (n8n runs on it) and a Slack workspace where you can add apps.
    Then try the real thing: start the API, log in at `/docs`, and change a ticket's priority to `urgent`.
 
 `/webhook/urgent-ticket` is the production URL, which works while the workflow is active. The editor's "Listen for test event" button uses `/webhook-test/urgent-ticket` instead, and only for one call.
+
+## Move from npx n8n to Docker
+
+Copy `~/.n8n` into the container's volume once. That brings the workflow, both credentials, and the key n8n encrypted them with, so nothing needs entering again. `~/.n8n` itself isn't changed.
+
+Both must be the same n8n version, 2.35.7, because n8n upgrades its database when it starts and an older version may not open it. Stop `npx n8n` first (Ctrl+C in its terminal), so its database isn't copied halfway through a write. Then:
+
+```bash
+docker compose stop n8n                  # if it's running
+docker compose run --rm --no-deps --user root -v "$HOME/.n8n:/from:ro" --entrypoint sh n8n \
+  -c 'cp -a /from/. /home/node/.n8n/ && chown -R node:node /home/node/.n8n'
+docker compose up -d n8n
+```
+
+The copy runs as root, so it can make the files belong to `node`, the user n8n runs as. When n8n starts, its log should say `Activated workflow "Urgent ticket to Slack"`. The API container calls n8n at `http://n8n:5678`, so the webhook URL changes only inside Docker, and the Slack side stays as it was.
 
 ## Change it
 

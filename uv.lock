@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -1629,6 +1629,7 @@ dev = [
     { name = "httpx2" },
     { name = "pandas" },
     { name = "pytest" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -1653,6 +1654,7 @@ dev = [
     { name = "httpx2", specifier = ">=2.14.0" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [[package]]

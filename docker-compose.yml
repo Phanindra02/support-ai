@@ -1,0 +1,103 @@
+# The whole stack in containers: the API, Postgres, Redis, and n8n. From the project root:
+#   docker compose up --build -d
+#
+# Compose reads .env from this folder, both for the ${...} values below and for the API's
+# settings. This file sits at the root, rather than in infra/, so that works with no flags.
+
+name: support-ai
+
+# The API and its migrations run from the same image with the same settings. This block is
+# written once here, and the two services below copy it with "<<: *api".
+x-api: &api
+  build:
+    context: .
+    dockerfile: infra/api.Dockerfile
+  image: support-ai-api
+  # Every setting in .env, such as JWT_SECRET_KEY and TWILIO_AUTH_TOKEN. The values under
+  # environment win over .env, and point the API at the other containers instead of the Mac.
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://support:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/support
+    REDIS_URL: redis://redis:6379/0
+    N8N_WEBHOOK_URL: http://n8n:5678/webhook/urgent-ticket
+    # Trust ngrok's X-Forwarded-Proto and X-Forwarded-For headers only from this network's
+    # gateway, where every connection from the Mac arrives, ngrok's included. The Twilio
+    # signature needs the https:// URL, and the rate limit needs the customer's real IP.
+    # "*" would let any client make up the IP that the rate limit counts.
+    FORWARDED_ALLOW_IPS: 172.28.0.1
+
+services:
+  api:
+    <<: *api
+    # 127.0.0.1, so only programs on the Mac (ngrok among them) can reach the API.
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Brings the database up to the latest migration, then exits. The API waits for it to
+  # finish, so it never runs against old tables.
+  migrate:
+    <<: *api
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The same major version as Homebrew's postgresql@16 on the Mac. The tag gets bug and
+  # security fixes (16.x) without a surprise upgrade to 17.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: support
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: support
+    # A named volume keeps the data when the container is replaced.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # No published port: only the other containers reach it, and it can't clash with
+    # Postgres on the Mac. For a shell: docker compose exec postgres psql -U support
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U support -d support"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  # Holds only the cache and the rate limit's counters, which are fine to lose, so no volume.
+  redis:
+    image: redis:8
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  # Pinned to an exact version, because n8n upgrades its own database when a new version
+  # first starts, and an older one may not open it again.
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.35.7
+    # The editor, at http://localhost:5678.
+    ports:
+      - "127.0.0.1:5678:5678"
+    # n8n keeps its workflows, credentials, and encryption key here.
+    volumes:
+      - n8n-data:/home/node/.n8n
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  n8n-data:
+
+# A fixed address range, so the gateway that FORWARDED_ALLOW_IPS trusts is always 172.28.0.1.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1

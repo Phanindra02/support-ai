@@ -31,7 +31,8 @@ uv add <package>                         # add a dependency (never pip install)
 - `worker/`: the RQ background worker (Stage 6).
 - `ml/`: model training and the model service (Stage 7).
 - `lambda/`: the S3-triggered PDF text extraction Lambda (Stage 5).
-- `infra/`: Dockerfiles, docker-compose, Kubernetes manifests, the Helm chart, and exported n8n workflows.
+- `infra/`: Dockerfiles, Kubernetes manifests, the Helm chart, and exported n8n workflows.
+- `docker-compose.yml`: at the root rather than in `infra/`, so `docker compose up` finds it and the `.env` beside it with no flags.
 - `scripts/`: the seed script and the Pandas weekly report.
 - `tests/`: pytest tests.
 - `docs/`: the roadmap, stage summaries (`docs/stages/`), system design notes (`docs/system-design/`), measured numbers (`docs/results.md`), and the design doc.

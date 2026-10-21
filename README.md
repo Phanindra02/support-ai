@@ -43,6 +43,33 @@ uv run python -m scripts.explain_list    # time the list query with EXPLAIN ANAL
 uv run python -m scripts.measure_cache   # time GET /stats with and without the cache (see the script)
 ```
 
+## Run it with Docker
+
+Docker Compose runs the API, Postgres, Redis, and n8n in containers, so Python, Postgres, and Redis don't need to be installed. You need [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+Copy `.env.example` to `.env` as above. Compose only needs two values filled in: `JWT_SECRET_KEY` (`openssl rand -hex 32`) and `POSTGRES_PASSWORD` (`openssl rand -hex 24`). It points the API at the containers' own Postgres, Redis, and n8n, whatever `.env` says.
+
+```bash
+docker compose up --build -d             # build the API image, then start everything in the background
+docker compose exec api python -m scripts.create_agent --email you@example.com --name "Your Name" --admin
+```
+
+Then open http://localhost:8000/docs for the API, and http://localhost:5678 for n8n ([set up the workflow](infra/n8n/README.md)).
+
+- **Migrations run by themselves.** The `migrate` container runs `alembic upgrade head` and exits, and the API waits until it has finished. After pulling new code, `docker compose up --build -d` rebuilds the image and applies any new migrations.
+- **Only the API and n8n are reachable from the Mac,** and only at `127.0.0.1`. Postgres and Redis have no published ports, so they can't clash with the ones from Homebrew. For a database shell: `docker compose exec postgres psql -U support`.
+- **Data lives in volumes.** The `postgres-data` and `n8n-data` volumes survive `docker compose down`. `docker compose down -v` deletes them.
+- **Ports 8000 and 5678 are also the ones `uvicorn` and `npx n8n` use,** so stop those first.
+- **WhatsApp works the same way.** Run `ngrok http 8000` as before. The API trusts ngrok's forwarded headers only from the Docker network's gateway, `172.28.0.1`. That's where ngrok's connections arrive, and no client can choose that address. `docker-compose.yml` explains why that matters.
+
+```bash
+docker compose ps                        # what's running
+docker compose logs -f api               # follow the API's log
+docker compose down                      # stop and remove the containers, keeping the data
+```
+
+The image can also be built on its own: `docker build -f infra/api.Dockerfile -t support-ai-api .`
+
 ## API
 
 | Method | Path | What it does | Who | Success |
@@ -303,6 +330,8 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 - `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
 - `alembic/`: database migrations.
+- `docker-compose.yml`: the whole stack in containers. It sits at the root so `docker compose` finds it, and the `.env` beside it, without flags.
+- `infra/`: the API's Dockerfile (`api.Dockerfile`) and the exported [n8n workflow](infra/n8n/README.md).
 - `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
 - `tests/`: pytest tests.
 - `docs/`: the roadmap, stage summaries, [measured results](docs/results.md), and [system design notes](docs/system-design/).

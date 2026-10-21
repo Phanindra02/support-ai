@@ -1,5 +1,7 @@
 """Settings come from environment variables or .env, and .env.example lists every one."""
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,6 +12,7 @@ URL = "postgresql+psycopg://user:secret@db.example.com:5432/support"
 REDIS_URL = "redis://cache.example.com:6379/0"
 JWT_SECRET_KEY = "k" * 64
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
+COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 
 # The settings with no default, which the app can't start without.
 REQUIRED = {"DATABASE_URL": URL, "REDIS_URL": REDIS_URL, "JWT_SECRET_KEY": JWT_SECRET_KEY}
@@ -73,7 +76,9 @@ def test_a_short_jwt_secret_is_an_error(no_settings_in_environment, monkeypatch)
 def test_env_example_lists_every_setting():
     lines = ENV_EXAMPLE.read_text().splitlines()
     names = {line.split("=", 1)[0] for line in lines if line.strip() and not line.startswith("#")}
-    assert names == {name.upper() for name in Settings.model_fields}
+    # The app's settings, plus the ${NAME} values docker compose fills in from .env.
+    compose_names = set(re.findall(r"\$\{(\w+)", COMPOSE_FILE.read_text()))
+    assert names == {name.upper() for name in Settings.model_fields} | compose_names
 
 
 def test_env_example_values_load(no_settings_in_environment, monkeypatch):
