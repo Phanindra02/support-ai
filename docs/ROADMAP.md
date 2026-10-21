@@ -69,13 +69,13 @@ Done when: agents log in with JWTs, WhatsApp messages become tickets, and urgent
 
 - [x] Add agent accounts with hashed passwords and a login endpoint that returns a JWT, following FastAPI's official security tutorial.
 - [x] Require login for agent endpoints, and add two roles: agents update tickets, and admins manage agents.
-- [ ] **[You]** Create a Twilio account and join the WhatsApp sandbox (not plain SMS; see the note below). Put the account SID and auth token in `.env`.
-- [ ] Install ngrok with Homebrew and run it so Twilio can reach the API. **[You]** Create an ngrok account and add its authtoken.
-- [ ] **[You]** Point the sandbox's incoming-message webhook at `POST /webhooks/twilio` on the ngrok URL.
+- [x] **[You]** Create a Twilio account and join the WhatsApp sandbox (not plain SMS; see the note below). Put the account SID and auth token in `.env`. Only the auth token went in: nothing uses the SID until the API sends messages itself.
+- [x] Install ngrok with Homebrew and run it so Twilio can reach the API. **[You]** Create an ngrok account and add its authtoken.
+- [x] **[You]** Point the sandbox's incoming-message webhook at `POST /webhooks/twilio` on the ngrok URL.
 - [x] In that webhook, verify Twilio's request signature.
 - [x] Find or create the customer by phone number, and add the message to their open ticket or a new one.
 - [x] Send the customer a confirmation reply.
-- [ ] Start n8n with `npx n8n` and build a workflow: a Webhook trigger that posts ticket details to a Slack channel. Commit the exported workflow JSON in `infra/n8n/`. **[You]** Create the Slack channel and connect Slack in n8n.
+- [x] Start n8n with `npx n8n` and build a workflow: a Webhook trigger that posts ticket details to a Slack channel. Commit the exported workflow JSON in `infra/n8n/`. **[You]** Create the Slack channel and connect Slack in n8n.
 - [x] When a ticket is marked urgent, have the API call that n8n webhook.
 - [x] Add a shared secret header to that call so only the API can trigger it.
 - [x] Write tests that fake the Twilio and n8n calls.
