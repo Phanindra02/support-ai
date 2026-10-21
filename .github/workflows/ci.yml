@@ -15,8 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # The same uv as on the Mac and in infra/api.Dockerfile. It also caches downloaded
-      # packages between runs, keyed on uv.lock.
-      - uses: astral-sh/setup-uv@v10
+      # packages between runs, keyed on uv.lock. setup-uv only publishes exact versions, with
+      # no v10 tag that moves to each release, so it's pinned to one.
+      - uses: astral-sh/setup-uv@v10.3.1
         with:
           version: "0.13.2"
       # --locked fails if uv.lock is out of date with pyproject.toml, instead of updating it.
@@ -62,7 +63,7 @@ jobs:
       TEST_REDIS_URL: redis://localhost:6379/15
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.1
         with:
           version: "0.13.2"
       - run: uv sync --locked
