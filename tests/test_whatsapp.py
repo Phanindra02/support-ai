@@ -1,11 +1,13 @@
 """The Twilio webhook. These tests play Twilio: they sign requests with a made-up auth token,
 the same way Twilio does, so no Twilio account or network is needed."""
 
+import json
 import time
 from threading import Thread
 from xml.etree import ElementTree
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
@@ -364,3 +366,34 @@ def test_text_in_the_reply_is_escaped_for_xml(client):
     assert [m.text for m in ElementTree.fromstring(str(reply)).iter("Message")] == [
         "<Redirect>https://evil.example.com</Redirect> & more"
     ]
+
+
+# From WhatsApp to Slack, with Twilio and n8n both faked
+
+
+@pytest.fixture
+def agent_client(test_app, make_agent, auth_header):
+    """An agent working the tickets, next to Twilio's client, which isn't logged in."""
+    agent = make_agent(name="Ada Lovelace", email="ada@example.com")
+    return TestClient(test_app, headers=auth_header(agent))
+
+
+def test_a_whatsapp_ticket_marked_urgent_reaches_slack(client, agent_client, n8n, monkeypatch):
+    monkeypatch.setattr(settings, "n8n_webhook_secret", "made-up-n8n-secret-for-tests")
+
+    reply = send(client, "My card was charged twice\nPlease refund one.", ProfileName="Jane Doe")
+    assert "Your ticket number is 1," in replies(reply)[0]
+    assert n8n.requests == []  # A new ticket is medium priority, so no alert yet.
+
+    response = agent_client.patch("/tickets/1", json={"priority": "urgent"})
+    assert response.status_code == 200, response.text
+
+    [request] = n8n.requests
+    assert request.headers["X-Webhook-Secret"] == "made-up-n8n-secret-for-tests"
+    alert = json.loads(request.content)
+    assert alert["subject"] == "My card was charged twice"
+    assert (alert["customer_name"], alert["marked_urgent_by"]) == ("Jane Doe", "Ada Lovelace")
+
+    # The customer writes again. The ticket is already urgent, so Slack hears nothing new.
+    assert send(client, "Any news?").text == EMPTY_TWIML
+    assert len(n8n.requests) == 1
