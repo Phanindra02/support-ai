@@ -84,7 +84,7 @@ Why WhatsApp: plain SMS to US numbers needs A2P 10DLC registration, trial accoun
 
 ### System design
 
-- [ ] Learn authentication vs authorization, sessions vs JWTs, and the main OAuth2 flows.
+- [x] Learn authentication vs authorization, sessions vs JWTs, and the main OAuth2 flows.
 - [ ] Learn how webhooks handle retries and duplicate deliveries, and why handlers should be idempotent.
 - [ ] Apply it: make the Twilio webhook skip message IDs that are already stored, so a repeat delivery does nothing.
 
