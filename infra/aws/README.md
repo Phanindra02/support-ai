@@ -199,7 +199,7 @@ docker compose up -d --no-build
 docker compose exec api python -m scripts.create_agent --email you@example.com --name "Your Name" --admin
 ```
 
-`--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty for now, so the WhatsApp webhook answers 503 and alerts are skipped. Later in Stage 5, every secret moves to Parameter Store.
+`--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty, so the WhatsApp webhook answers 503 and alerts are skipped until they're set. Once the database and the secrets below are set up, the app loads every secret from Parameter Store instead, and the server's `.env` holds none of them.
 
 Until Caddy serves HTTPS, nothing but SSH is open, so reach the API and n8n through an SSH tunnel. Then http://localhost:8001/docs on the Mac is the server's API, and http://localhost:5679 its n8n:
 
@@ -215,9 +215,9 @@ cd ~/support-ai && git pull && docker compose pull && docker compose up -d --no-
 
 ### Move it to RDS
 
-Once the database below exists, the server uses it instead of its Postgres container. `compose.ec2.yml` holds the server's changes to `docker-compose.yml`: the API and the migrations take `DATABASE_URL` from `.env`, and the Postgres container no longer starts. One line in the server's `.env`, `COMPOSE_FILE`, makes every `docker compose` command there read both files.
+Once the database and the secrets below exist, the server uses RDS instead of its Postgres container. `compose.ec2.yml` holds the server's changes to `docker-compose.yml`. The API and the migrations load `DATABASE_URL` and the other secrets from Parameter Store, and the Postgres container no longer starts. One line in the server's `.env`, `COMPOSE_FILE`, makes every `docker compose` command there read both files.
 
-The URL comes from Parameter Store, read with the instance role from inside the API's image, which has boto3. It goes into `.env` without being shown, and moves out of `.env` when the app loads its secrets from Parameter Store itself, later in Stage 5.
+The copy below also needs the URL, for psql. The app's own settings print it, so it comes from Parameter Store the same way. It's kept in a shell variable and never shown.
 
 `docker compose run` reads whatever input follows it, so when these lines are pasted, or piped in with `ssh server bash -s`, it swallows the lines after it and they never run. `</dev/null` gives it nothing to read.
 
@@ -225,9 +225,8 @@ The URL comes from Parameter Store, read with the instance role from inside the 
 # On the server:
 cd ~/support-ai && git pull && docker compose pull
 
-DATABASE_URL=$(docker compose run --rm --no-deps -T api python -c "import boto3; print(boto3.client('ssm', region_name='us-east-2').get_parameter(Name='/support-ai/DATABASE_URL', WithDecryption=True)['Parameter']['Value'])" </dev/null)
-sed -i "s|^DATABASE_URL=.*|DATABASE_URL=${DATABASE_URL}|" .env
 echo "COMPOSE_FILE=docker-compose.yml:infra/aws/compose.ec2.yml" >> .env
+DATABASE_URL=$(docker compose run --rm --no-deps -T api python -c "from app.config import settings; print(settings.database_url)" </dev/null)
 
 # Stop the API, so nothing changes during the copy. Then make the tables on RDS.
 docker compose stop api
@@ -272,7 +271,7 @@ RDS for PostgreSQL 16 only accepts encrypted connections (`rds.force_ssl` is on 
 
 ### The password
 
-The database's password is made in the same commands that create it, and goes straight into Parameter Store as `/support-ai/DATABASE_URL`, the whole URL the API needs. It's a SecureString, encrypted with the AWS-managed `aws/ssm` key, and it's never printed or saved on the Mac. Standard parameters cost nothing. Later in Stage 5, the app loads this and every other secret from Parameter Store when it starts.
+The database's password is made in the same commands that create it, and goes straight into Parameter Store as `/support-ai/DATABASE_URL`, the whole URL the API needs. It's a SecureString, encrypted with the AWS-managed `aws/ssm` key, and it's never printed or saved on the Mac. The app loads it, with the other secrets, when it starts ([below](#the-secrets-parameter-store)).
 
 RDS can instead keep the password in Secrets Manager (`--manage-master-user-password`), which changes it every 7 days. That would break the URL stored here each week, and costs $0.40 a month per secret, so this project keeps one place for secrets: Parameter Store.
 
@@ -314,14 +313,6 @@ unset DB_PASSWORD
 
 Settings given on the command line are added to the ones in the JSON file, which is why the password and the security group (whose ID differs each time it's made) aren't in it.
 
-The server reads the URL with its role, which the updated `ec2-permissions.json` allows. It names that one parameter and only `ssm:GetParameter`, so the server can't list, change, or read any other. Decrypting needs no extra permission, because the `aws/ssm` key lets anyone in the account use it through Parameter Store. To apply the change to the existing role:
-
-```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
-  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
-```
-
 If the terminal closes before `put-parameter`, the password is lost, but nothing is broken. Set a new one, then store the URL with `--overwrite`:
 
 ```bash
@@ -351,4 +342,84 @@ To check the certificate without the password, on the server, from `~/support-ai
 ```bash
 docker run --rm -v "$PWD/infra/aws/rds-ca-us-east-2.pem:/rds.pem:ro" postgres:16 \
   psql -w "host=$DB_HOST user=support dbname=support sslmode=verify-full sslrootcert=/rds.pem"
+```
+
+## The secrets (Parameter Store)
+
+On EC2, every secret the app needs is a SecureString parameter under `/support-ai`, in AWS Systems Manager Parameter Store. None of them is in the server's `.env`, on its disk, or in the image.
+
+| Parameter | What it is | Set by |
+| --- | --- | --- |
+| `/support-ai/DATABASE_URL` | The RDS URL, with its password | The commands that created the database |
+| `/support-ai/JWT_SECRET_KEY` | Signs agents' login tokens | A random value, made below |
+| `/support-ai/TWILIO_AUTH_TOKEN` | Checks that WhatsApp webhooks came from Twilio | The developer, copied from the Mac's `.env` |
+| `/support-ai/N8N_WEBHOOK_SECRET` | Proves alerts to n8n came from the API | The developer, once the server's n8n has the workflow |
+
+**How the app loads them.** `compose.ec2.yml` sets `PARAMETER_STORE_PATH=/support-ai` for the API and the migrations. When the app starts, `app/config.py` makes one `GetParametersByPath` request (more if there are over 10), with decryption, and the part of each name after the last `/` names the setting it fills. The first place that sets a value wins: a real environment variable, then `.env`, then Parameter Store, then the default in `app/config.py`. So the server's `.env` must leave these four out, or empty (`NAME=` counts as not set). On the Mac and in CI, `PARAMETER_STORE_PATH` is empty, and the app never asks AWS.
+
+The app reads them only when it starts. If AWS can't be reached, the API stops within about a minute with an error, rather than running without its secrets, and Docker starts it again (`restart: unless-stopped`).
+
+**Who can read them.** The server's role may call only `ssm:GetParametersByPath`, on `parameter/support-ai` (`ec2-permissions.json`). IAM checks that against the path the request asks for, so the role can read what's directly under `/support-ai`, and nothing deeper or anywhere else. It can't change or delete a parameter. Decrypting needs no KMS permission: the AWS-managed `aws/ssm` key lets anyone in the account use it, but only through Parameter Store.
+
+Cost: standard parameters, and their default throughput, are free. Secrets Manager would cost $0.40 a month per secret, for automatic rotation that this project doesn't use.
+
+### Create them
+
+```bash
+# On the Mac. The server's role, allowed to read the parameters:
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
+
+# A new key for signing login tokens, never shown. Tokens signed with the old one stop working.
+aws ssm put-parameter --region us-east-2 --name /support-ai/JWT_SECRET_KEY --type SecureString \
+  --value "$(openssl rand -hex 32)"
+
+# The same Twilio account as the Mac, so the same token, read from the Mac's .env.
+aws ssm put-parameter --region us-east-2 --name /support-ai/TWILIO_AUTH_TOKEN --type SecureString \
+  --value "$(grep '^TWILIO_AUTH_TOKEN=' .env | cut -d= -f2-)"
+```
+
+`DATABASE_URL` is already there, from the database's commands. `N8N_WEBHOOK_SECRET` waits until the server's n8n has the workflow, with its own Header Auth value:
+
+```bash
+aws ssm put-parameter --region us-east-2 --name /support-ai/N8N_WEBHOOK_SECRET --type SecureString \
+  --value "$(openssl rand -hex 32)"
+# Then copy it into the Header Auth credential of the server's n8n:
+aws ssm get-parameter --region us-east-2 --name /support-ai/N8N_WEBHOOK_SECRET \
+  --with-decryption --query Parameter.Value --output text
+```
+
+Then, on the server, empty the secrets in `.env`, so Parameter Store's values are used, and restart. `POSTGRES_PASSWORD` stays, because `docker-compose.yml` won't load without it, though the container it was for no longer runs.
+
+```bash
+cd ~/support-ai && git pull && docker compose pull
+sed -i -E 's/^(DATABASE_URL|JWT_SECRET_KEY|TWILIO_AUTH_TOKEN|N8N_WEBHOOK_SECRET)=.*/\1=/' .env
+docker compose up -d --no-build
+```
+
+### Change one
+
+Write the new value with `--overwrite`, then restart the API, which reads secrets only when it starts. `read -rs` (zsh, on the Mac) takes the value without showing it or saving it in the shell's history:
+
+```bash
+read -rs "VALUE?New value: " && echo
+aws ssm put-parameter --region us-east-2 --name /support-ai/NAME --type SecureString --overwrite \
+  --value "$VALUE"
+unset VALUE
+# On the server:
+docker compose up -d --no-build --force-recreate api
+```
+
+### Check them
+
+```bash
+# Names, types, and versions, without the values:
+aws ssm describe-parameters --region us-east-2 \
+  --parameter-filters Key=Name,Option=BeginsWith,Values=/support-ai/ \
+  --query 'Parameters[].[Name,Type,Version]' --output table
+
+# On the server: the container has no secret in its environment, and the app still has them.
+docker compose exec -T api sh -c 'env | grep -cE "^(DATABASE_URL|JWT_SECRET_KEY)=."' </dev/null
+docker compose exec -T api python -c "from app.config import settings; print(settings.database_url.split('@')[1])" </dev/null
 ```

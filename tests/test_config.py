@@ -2,7 +2,9 @@
 
 import re
 
+import boto3
 import pytest
+from moto import mock_aws
 from pydantic import ValidationError
 
 from app.config import PROJECT_ROOT, Settings
@@ -123,3 +125,86 @@ def test_the_app_will_not_start_with_the_jwt_secret_from_env_example(no_settings
 
 def test_the_app_connects_with_psycopg_3():
     assert engine.url.drivername == "postgresql+psycopg"
+
+
+# Parameter Store, which holds the secrets on EC2. moto's mock_aws stands in for AWS.
+
+PATH = "/support-ai"
+
+
+@pytest.fixture
+def parameter_store(no_settings_in_environment, monkeypatch):
+    """A fake Parameter Store, and PARAMETER_STORE_PATH pointing at it."""
+    with mock_aws():
+        monkeypatch.setenv("PARAMETER_STORE_PATH", PATH)
+        ssm = boto3.client("ssm", region_name="us-east-2")
+
+        def put(name, value):
+            ssm.put_parameter(Name=f"{PATH}/{name}", Value=value, Type="SecureString")
+
+        yield put
+
+
+def test_settings_missing_from_the_environment_come_from_parameter_store(parameter_store):
+    for name, value in REQUIRED.items():
+        parameter_store(name, value)
+    parameter_store("TWILIO_AUTH_TOKEN", "twilio-token")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    # SecureString values arrive decrypted.
+    assert settings.database_url == URL
+    assert settings.jwt_secret_key == JWT_SECRET_KEY
+    assert settings.twilio_auth_token == "twilio-token"
+
+
+def test_the_environment_and_env_win_over_parameter_store(parameter_store, monkeypatch, tmp_path):
+    for name in REQUIRED:
+        parameter_store(name, "x" * 40)
+    monkeypatch.setenv("DATABASE_URL", URL)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"REDIS_URL={REDIS_URL}\n")
+    settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
+    assert settings.database_url == URL
+    assert settings.redis_url == REDIS_URL
+    assert settings.jwt_secret_key == "x" * 40
+
+
+def test_an_empty_line_in_env_does_not_hide_parameter_store(parameter_store, tmp_path):
+    # .env.example leaves every secret as NAME=, and the server's .env starts as a copy of it.
+    for name, value in REQUIRED.items():
+        parameter_store(name, value)
+    env_file = tmp_path / ".env"
+    env_file.write_text("JWT_SECRET_KEY=\nDATABASE_URL=\n")
+    settings = Settings(_env_file=env_file)  # type: ignore[call-arg]
+    assert settings.jwt_secret_key == JWT_SECRET_KEY
+    assert settings.database_url == URL
+
+
+def test_only_settings_directly_under_the_path_are_loaded(parameter_store):
+    for name, value in REQUIRED.items():
+        parameter_store(name, value)
+    # More than the 10 one call returns, so the rest must come from the next page.
+    for number in range(10):
+        parameter_store(f"NOT_A_SETTING_{number}", "ignored")
+    parameter_store("N8N_WEBHOOK_SECRET", "n8n-secret")
+    parameter_store("deeper/TWILIO_AUTH_TOKEN", "not-this-one")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.n8n_webhook_secret == "n8n-secret"
+    assert settings.twilio_auth_token is None
+
+
+def test_a_setting_missing_everywhere_is_still_an_error(parameter_store):
+    parameter_store("DATABASE_URL", URL)
+    parameter_store("REDIS_URL", REDIS_URL)
+    with pytest.raises(ValidationError, match="jwt_secret_key"):
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_without_a_path_parameter_store_is_never_asked(no_settings_in_environment, monkeypatch):
+    # The Mac and CI have no PARAMETER_STORE_PATH, and must start without AWS.
+    def no_aws(*args, **kwargs):
+        raise AssertionError("Parameter Store was asked")
+
+    monkeypatch.setattr(boto3, "client", no_aws)
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    assert Settings(_env_file=None).database_url == URL  # type: ignore[call-arg]

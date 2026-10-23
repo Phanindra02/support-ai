@@ -160,7 +160,7 @@ def test_the_server_can_pull_the_api_image_but_never_push(server_permissions):
         "SaveUploadedDocs",
         "LogInToEcr",
         "PullTheApiImage",
-        "ReadTheDatabaseUrl",
+        "LoadTheAppSecrets",
     }
     pull = server_permissions["PullTheApiImage"]
     assert set(pull["Action"]) == {
@@ -192,6 +192,13 @@ def test_first_boot_restarts_docker_after_installing_it():
 
 
 # The database (RDS).
+
+
+class IgnoreTagsLoader(yaml.SafeLoader):
+    """safe_load, but compose's !reset tag reads as None instead of failing."""
+
+
+IgnoreTagsLoader.add_constructor("!reset", lambda loader, node: None)
 
 
 @pytest.fixture(scope="module")
@@ -265,7 +272,8 @@ def test_no_database_password_is_written_in_the_file(database):
 
 
 def test_the_database_url_is_stored_encrypted_and_checks_the_certificate(database, readme):
-    [command] = re.findall(r"aws ssm put-parameter[^\n]*\\\n[^\n]*", readme)
+    commands = re.findall(r"aws ssm put-parameter[^\n]*\\\n[^\n]*", readme)
+    [command] = [command for command in commands if "/support-ai/DATABASE_URL" in command]
     assert "--name /support-ai/DATABASE_URL --type SecureString" in command
     [url] = re.findall(r'--value "([^"]+)"', command)
     url = make_url(url)
@@ -276,13 +284,22 @@ def test_the_database_url_is_stored_encrypted_and_checks_the_certificate(databas
     assert url.query == {"sslmode": "verify-full"}
 
 
-def test_the_server_can_only_read_the_database_url(server_permissions, readme):
-    # Not GetParametersByPath or PutParameter: one parameter, read only.
-    read = server_permissions["ReadTheDatabaseUrl"]
-    assert read["Action"] == "ssm:GetParameter"
-    assert read["Resource"] == "arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter/support-ai/DATABASE_URL"
-    # The same name the README stores the URL under and the server reads it from.
-    assert readme.count("/support-ai/DATABASE_URL") >= 3
+def test_the_server_can_only_read_the_apps_own_parameters(server_permissions):
+    # GetParametersByPath is checked against the path asked for, not each parameter returned,
+    # so the resource is the path. Read only: no PutParameter or DeleteParameter.
+    load = server_permissions["LoadTheAppSecrets"]
+    assert load["Action"] == "ssm:GetParametersByPath"
+    compose = yaml.load((AWS / "compose.ec2.yml").read_text(), Loader=IgnoreTagsLoader)
+    path = compose["services"]["api"]["environment"]["PARAMETER_STORE_PATH"]
+    assert load["Resource"] == f"arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter{path}"
+
+
+def test_every_secret_is_stored_encrypted(readme):
+    # A String parameter would be readable by anyone allowed to list parameters.
+    commands = re.findall(r"aws ssm put-parameter[^\n]*(?:\\\n[^\n]*)*", readme)
+    assert commands
+    for command in commands:
+        assert "--type SecureString" in command, command
 
 
 def test_the_certificates_are_amazons_roots_for_rds_in_us_east_2():
