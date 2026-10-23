@@ -96,3 +96,119 @@ aws ecr describe-repositories --repository-names support-ai-api --region us-east
 aws ecr list-images --repository-name support-ai-api --region us-east-2
 aws iam get-role --role-name support-ai-ci-push-image --query Role.AssumeRolePolicyDocument
 ```
+
+## The server (EC2)
+
+One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of memory, running Ubuntu 24.04. It's ARM like the Mac and like CI's runner, so the image CI builds runs on it as is. It runs the same `docker compose` stack as the Mac.
+
+- **IAM role `support-ai-server`** gives the server's programs AWS credentials, through the instance metadata service, so no AWS keys are stored on it. `ec2-permissions.json` allows only what the app does: save uploads under `uploads/` in the docs bucket, and pull the API image from ECR. A role reaches an instance through an instance profile of the same name.
+- **IMDSv2 only, with a hop limit of 2.** IMDSv2 needs a token from a PUT request first, which blocks the classic attack where a server is tricked into fetching the metadata URL and leaking its credentials. The hop limit of 2 lets a container reach the metadata service: compose's network adds one hop, and at the default of 1 the API couldn't get the role's credentials.
+- **`ec2-user-data.sh`** runs once at first boot. It installs Docker with the compose plugin, sets up ECR logins through the instance role, and adds 2 GB of swap.
+- **Security group `support-ai-server`** is the firewall. It lets in SSH (port 22) only from the Mac's public IP. The API and n8n listen only on the server's 127.0.0.1, as on the Mac, and nothing else is let in until Caddy serves HTTPS on 80 and 443.
+- **SSH key** `~/.ssh/support-ai-ec2` is made on the Mac. Only its public half goes to AWS, as the key pair `support-ai`.
+- **Elastic IP:** a fixed public address, so the domain and Twilio's webhook keep working after the instance stops and starts.
+- **The disk** is 20 GB of encrypted gp3. **Termination protection** is on, so the instance can't be deleted by mistake.
+
+Cost: the instance $12.26, the disk $1.60, and the public IPv4 address $3.65, about $17.50 a month. The address is billed even while the instance is stopped.
+
+### Create it
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+aws iam create-role --role-name support-ai-server \
+  --description "The EC2 server: saves uploads to S3 and pulls the API image from ECR" \
+  --assume-role-policy-document file://infra/aws/ec2-trust-policy.json
+aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
+aws iam create-instance-profile --instance-profile-name support-ai-server
+aws iam add-role-to-instance-profile --instance-profile-name support-ai-server \
+  --role-name support-ai-server
+
+ssh-keygen -t ed25519 -f ~/.ssh/support-ai-ec2 -C support-ai-ec2
+aws ec2 import-key-pair --region us-east-2 --key-name support-ai \
+  --public-key-material fileb://$HOME/.ssh/support-ai-ec2.pub
+
+SG_ID=$(aws ec2 create-security-group --region us-east-2 --group-name support-ai-server \
+  --description "support-ai EC2 server" --query GroupId --output text)
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id "$SG_ID" \
+  --protocol tcp --port 22 --cidr "$(curl -s https://checkip.amazonaws.com)/32"
+
+# The newest Ubuntu 24.04 image for ARM, which Canonical publishes in Parameter Store.
+AMI_ID=$(aws ssm get-parameter --region us-east-2 \
+  --name /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id \
+  --query Parameter.Value --output text)
+INSTANCE_ID=$(aws ec2 run-instances --region us-east-2 --image-id "$AMI_ID" \
+  --instance-type t4g.small --key-name support-ai --security-group-ids "$SG_ID" \
+  --iam-instance-profile Name=support-ai-server \
+  --metadata-options HttpTokens=required,HttpPutResponseHopLimit=2,HttpEndpoint=enabled \
+  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3","Encrypted":true}}]' \
+  --user-data file://infra/aws/ec2-user-data.sh --disable-api-termination \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=support-ai}]' \
+  'ResourceType=volume,Tags=[{Key=Name,Value=support-ai}]' \
+  --query 'Instances[0].InstanceId' --output text)
+aws ec2 wait instance-running --region us-east-2 --instance-ids "$INSTANCE_ID"
+
+ALLOC_ID=$(aws ec2 allocate-address --region us-east-2 --domain vpc \
+  --tag-specifications 'ResourceType=elastic-ip,Tags=[{Key=Name,Value=support-ai}]' \
+  --query AllocationId --output text)
+aws ec2 associate-address --region us-east-2 --instance-id "$INSTANCE_ID" --allocation-id "$ALLOC_ID"
+```
+
+A new instance profile can take a few seconds to be usable. If `run-instances` says the profile is invalid, wait a moment and run it again.
+
+### Reach it
+
+```bash
+SERVER_IP=$(aws ec2 describe-addresses --region us-east-2 \
+  --filters Name=tag:Name,Values=support-ai --query 'Addresses[0].PublicIp' --output text)
+ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP"
+```
+
+If SSH stops answering, the Mac's public IP has probably changed (home internet does that). Let the new one in, and remove the old rule in the console:
+
+```bash
+SG_ID=$(aws ec2 describe-security-groups --region us-east-2 \
+  --group-names support-ai-server --query 'SecurityGroups[0].GroupId' --output text)
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id "$SG_ID" \
+  --protocol tcp --port 22 --cidr "$(curl -s https://checkip.amazonaws.com)/32"
+```
+
+### Run the stack on it
+
+The same `docker-compose.yml` as on the Mac, except that the API image comes from ECR instead of being built: `API_IMAGE` in the server's `.env` names it. Pulling uses the instance role, through the ECR login that first boot set up.
+
+```bash
+# On the server, after ssh:
+git clone https://github.com/Phanindra02/support-ai.git
+cd support-ai
+cp .env.example .env
+chmod 600 .env
+
+# The ECR registry's name, from the login first boot set up. New secrets are made here, on
+# the server, so they never pass through the Mac.
+REGISTRY=$(python3 -c "import json; print(*json.load(open('/home/ubuntu/.docker/config.json'))['credHelpers'])")
+sed -i \
+  -e "s|^API_IMAGE=.*|API_IMAGE=${REGISTRY}/support-ai-api:latest|" \
+  -e "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=$(openssl rand -hex 32)|" \
+  -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 24)|" \
+  .env
+
+docker compose pull
+docker compose up -d --no-build
+docker compose exec api python -m scripts.create_agent --email you@example.com --name "Your Name" --admin
+```
+
+`--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty for now, so the WhatsApp webhook answers 503 and alerts are skipped. Later in Stage 5, every secret moves to Parameter Store.
+
+Until Caddy serves HTTPS, nothing but SSH is open, so reach the API and n8n through an SSH tunnel. Then http://localhost:8001/docs on the Mac is the server's API, and http://localhost:5679 its n8n:
+
+```bash
+ssh -i ~/.ssh/support-ai-ec2 -N -L 8001:localhost:8000 -L 5679:localhost:5678 ubuntu@"$SERVER_IP"
+```
+
+To run a newer image, until CI does it after each merge:
+
+```bash
+cd ~/support-ai && git pull && docker compose pull && docker compose up -d --no-build
+```

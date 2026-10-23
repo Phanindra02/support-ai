@@ -9,6 +9,7 @@ import re
 import pytest
 
 from app.config import PROJECT_ROOT
+from app.storage import UPLOAD_PREFIX
 
 AWS = PROJECT_ROOT / "infra" / "aws"
 BUCKET = "support-ai-docs-phanindra02"
@@ -125,3 +126,56 @@ def test_the_readme_commands_work_in_zsh():
     # zsh reads $ACCOUNT_ID:r as "ACCOUNT_ID without its extension", so
     # "arn:aws:iam::$ACCOUNT_ID:role/..." loses the ":r". ${ACCOUNT_ID} is safe in every shell.
     assert "$ACCOUNT_ID:" not in (AWS / "README.md").read_text()
+
+
+# The EC2 server.
+
+
+@pytest.fixture(scope="module")
+def server_permissions():
+    statements = json.loads((AWS / "ec2-permissions.json").read_text())["Statement"]
+    return {statement["Sid"]: statement for statement in statements}
+
+
+def test_only_ec2_can_use_the_servers_role():
+    [statement] = json.loads((AWS / "ec2-trust-policy.json").read_text())["Statement"]
+    assert statement["Principal"] == {"Service": "ec2.amazonaws.com"}
+    assert statement["Action"] == "sts:AssumeRole"
+
+
+def test_the_server_can_only_add_uploads_to_the_bucket(server_permissions):
+    save = server_permissions["SaveUploadedDocs"]
+    assert set(save["Action"]) == {"s3:PutObject", "s3:AbortMultipartUpload"}
+    # The same prefix the app saves under, so a change to one can't break uploads silently.
+    assert save["Resource"] == f"arn:aws:s3:::{BUCKET}/{UPLOAD_PREFIX}*"
+
+
+def test_the_server_can_pull_the_api_image_but_never_push(server_permissions):
+    assert set(server_permissions) == {"SaveUploadedDocs", "LogInToEcr", "PullTheApiImage"}
+    pull = server_permissions["PullTheApiImage"]
+    assert set(pull["Action"]) == {
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+    }
+    assert pull["Resource"] == "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+    assert server_permissions["LogInToEcr"]["Action"] == "ecr:GetAuthorizationToken"
+
+
+def test_the_server_needs_imdsv2_and_lets_containers_reach_it():
+    # A hop limit of 1 would keep the API's container from getting the role's credentials.
+    readme = (AWS / "README.md").read_text()
+    assert "--metadata-options HttpTokens=required,HttpPutResponseHopLimit=2" in readme
+
+
+def test_first_boot_stops_at_the_first_failing_command():
+    script = (AWS / "ec2-user-data.sh").read_text()
+    assert script.startswith("#!/bin/bash\n")
+    assert "\nset -euo pipefail\n" in script
+
+
+def test_first_boot_restarts_docker_after_installing_it():
+    # Installed during the first boot, Docker is left stopped unless it's restarted.
+    script = (AWS / "ec2-user-data.sh").read_text()
+    install = script.index("apt-get install -y docker-ce")
+    assert script.index("systemctl restart docker.socket docker.service") > install

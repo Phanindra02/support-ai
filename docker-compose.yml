@@ -12,7 +12,9 @@ x-api: &api
   build:
     context: .
     dockerfile: infra/api.Dockerfile
-  image: support-ai-api
+  # On the Mac, the image is built here and called support-ai-api. On EC2, API_IMAGE in .env
+  # names CI's image in ECR, which the server pulls instead of building (infra/aws/README.md).
+  image: ${API_IMAGE:-support-ai-api}
   # Every setting in .env, such as JWT_SECRET_KEY and TWILIO_AUTH_TOKEN. The values under
   # environment win over .env, and point the API at the other containers instead of the Mac.
   env_file: .env
