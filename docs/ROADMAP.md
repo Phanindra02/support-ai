@@ -122,7 +122,7 @@ Every resource in this stage costs money. Give the expected monthly cost and get
 - [x] Create the smallest RDS PostgreSQL instance, and allow connections only from the EC2 instance. A `db.t4g.micro` on PostgreSQL 16.15 with no public address, whose security group lets in only the server's security group. The URL with its password is in Parameter Store.
 - [x] Run the Alembic migrations on RDS and switch the API over to it. `infra/aws/compose.ec2.yml` points the server at RDS, and its one agent was copied over with `pg_dump`. The API connects with TLS 1.3 and checks the certificate (`sslmode=verify-full`).
 - [x] Store secrets in AWS Systems Manager Parameter Store and load them when the app starts. SecureStrings under `/support-ai`, loaded by a settings source in `app/config.py` on EC2 only. The server's `.env` holds no secrets.
-- [ ] **[You]** Buy a cheap domain. Point it at the instance, and put Caddy in front of the API for free automatic HTTPS.
+- [x] **[You]** Buy a cheap domain. Point it at the instance, and put Caddy in front of the API for free automatic HTTPS. The API is at `https://support.mysolospark.com`, a DNS-only Cloudflare record pointing at the Elastic IP. Caddy runs on the server's own network and reaches the API at `127.0.0.1:8000`, so the API's trust in forwarded headers didn't change.
 - [ ] **[You]** Update the Twilio webhook to the new URL.
 - [ ] Write a Lambda function that runs on every S3 upload and extracts the PDF's text with pypdf.
 - [ ] Have the Lambda save the text as a file in S3, then call the API (with a shared secret) to mark the doc "processed."
