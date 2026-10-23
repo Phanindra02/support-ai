@@ -1,8 +1,9 @@
 """The GitHub Actions workflow must check what the Mac checks, the same way.
 
-These tests read .github/workflows/ci.yml. GitHub runs it.
+These tests read .github/workflows/ci.yml, which GitHub runs, and the rules that protect main.
 """
 
+import json
 import re
 
 import pytest
@@ -120,3 +121,30 @@ def test_the_published_image_is_built_from_the_dockerfile(jobs):
     for step in image_steps(jobs):
         assert step["with"]["file"] == "infra/api.Dockerfile"
         assert step["with"]["context"] == "."
+
+
+# main's protection rules, which infra/github/README.md applies with gh api.
+GITHUB_ACTIONS_APP_ID = 15368
+
+
+@pytest.fixture(scope="module")
+def protection():
+    return json.loads((PROJECT_ROOT / "infra" / "github" / "main-protection.json").read_text())
+
+
+def test_every_ci_job_must_pass_before_a_merge(jobs, protection):
+    # A renamed job would never report under its old name, so pull requests would wait forever.
+    required = protection["required_status_checks"]["checks"]
+    assert {check["context"] for check in required} == set(jobs)
+
+
+def test_only_github_actions_can_pass_a_required_check(protection):
+    for check in protection["required_status_checks"]["checks"]:
+        assert check["app_id"] == GITHUB_ACTIONS_APP_ID
+
+
+def test_main_only_changes_through_a_pull_request(protection):
+    assert protection["required_pull_request_reviews"] is not None
+    assert protection["enforce_admins"] is True
+    assert protection["allow_force_pushes"] is False
+    assert protection["allow_deletions"] is False

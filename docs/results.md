@@ -112,3 +112,22 @@ The latency gain is real but small, because Postgres counts 100,000 rows in a fe
 | One line of app code changed, three runs | 0.5 to 0.6 s |
 
 The dependencies sit in their own layer, built before any code is copied in. A code change leaves that layer as it was, so Docker only redoes the small code layers. `--no-cache` throws away the layers but not uv's download cache, which is mounted separately, so even those builds didn't download every package again. That cache was empty only before the very first build, which took 18 s.
+
+## CI run time (Stage 4)
+
+**Setup.** Two runs of `.github/workflows/ci.yml` on pushes to `main`, read from the GitHub API's job and step times (`gh api repos/Phanindra02/support-ai/actions/runs/<id>/jobs`) and the build logs (`gh run view --job <id> --log`). `lint` and `test` run on `ubuntu-latest` side by side, then `image` runs on `ubuntu-24.04-arm`.
+
+| | Run 39691944975: empty layer cache | Run 39883091887: every layer cached |
+| --- | ---: | ---: |
+| Whole run, push to finish | 2 min 7 s | 1 min 56 s |
+| `lint` | 12 s | 12 s |
+| `test` (401 tests, with Postgres and Redis) | 59 s | 51 s |
+| `image`, all of it | 58 s | 56 s |
+| Build the image | 35 s | 33 s |
+| ...of which `uv sync` | 4.6 s | cached |
+| ...of which saving layers to the Actions cache | 14.8 s | 12.6 s |
+| Push to GHCR | 6 s | 6 s |
+
+The second run only changed `docs/ROADMAP.md`, which isn't in the build context, so every build step was `CACHED`. Even so, it saved just 2 s. On GitHub's runners, uv installs all 68 packages in under 5 seconds, so there's little for the cache to save. Most of the build is moving layers instead: loading the image into Docker for the smoke test, and saving every layer back to the cache (`cache-to: mode=max`) on each run. On the Mac the cache matters far more (0.6 s against 8 to 15 s, above), because Docker keeps the layers on the same disk.
+
+A whole run takes about 2 minutes, and `test` then `image` are the critical path. Saving only the final layers (`mode=min`) or dropping the Actions cache could save 10 to 15 s a run. That hasn't been tried.
