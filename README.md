@@ -82,6 +82,20 @@ Every push, to any branch, runs [.github/workflows/ci.yml](.github/workflows/ci.
 
 Both install with `uv sync --locked`, which fails if `uv.lock` is out of date, and use the same uv version as the Mac and the Dockerfile. To run the same checks before pushing: `uv run ruff check . && uv run pytest`.
 
+### Changing main
+
+`main` is protected, so every change goes through a pull request, and it can only merge once `lint`, `test`, and `image` pass on its latest commit. That applies to the repo's owner too, and nobody can force-push to `main` or delete it. The rules are kept in [infra/github/](infra/github/README.md), with the command that applies them.
+
+```bash
+git switch -c my-change                  # work on a branch
+git push -u origin my-change             # CI runs on the branch
+gh pr create --fill                      # open a pull request
+gh pr checks --watch                     # wait for the three checks
+gh pr merge --merge --delete-branch      # merge once they pass
+```
+
+If `main` moves on while a pull request is open, the branch has to be brought up to date first (`gh pr update-branch`), so the checks run again against the newest `main`. The merge to `main` is a push like any other, so CI runs again there and publishes the image.
+
 ## API
 
 | Method | Path | What it does | Who | Success |
@@ -343,7 +357,8 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 - `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
 - `alembic/`: database migrations.
 - `docker-compose.yml`: the whole stack in containers. It sits at the root so `docker compose` finds it, and the `.env` beside it, without flags.
-- `infra/`: the API's Dockerfile (`api.Dockerfile`) and the exported [n8n workflow](infra/n8n/README.md).
+- `infra/`: the API's Dockerfile (`api.Dockerfile`), the exported [n8n workflow](infra/n8n/README.md), and the [rules that protect main](infra/github/README.md).
+- `.github/workflows/ci.yml`: the CI workflow.
 - `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
 - `tests/`: pytest tests.
 - `docs/`: the roadmap, stage summaries, [measured results](docs/results.md), and [system design notes](docs/system-design/).

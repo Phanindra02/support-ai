@@ -98,7 +98,7 @@ Done when: one command starts the whole stack in containers, and GitHub Actions 
 - [x] Add a GitHub Actions workflow that runs on every push: install dependencies with uv, lint with ruff, and run pytest.
 - [x] Run those tests against a Postgres service container inside the workflow. Redis runs as one too, since the tests need it.
 - [x] On merges to main, build the image on GitHub's ARM runner (`ubuntu-24.04-arm`) and push it to GitHub Container Registry. Published as `ghcr.io/phanindra02/support-ai-api`; anyone can pull it, since the repo is public.
-- [ ] Protect the main branch so nothing merges unless CI passes. From here on, work on branches and open pull requests.
+- [x] Protect the main branch so nothing merges unless CI passes. From here on, work on branches and open pull requests. The rules are in `infra/github/main-protection.json`, and apply to admins too.
 
 ### System design
 
