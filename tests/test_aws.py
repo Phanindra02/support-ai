@@ -178,6 +178,21 @@ def test_the_server_needs_imdsv2_and_lets_containers_reach_it():
     assert "--metadata-options HttpTokens=required,HttpPutResponseHopLimit=2" in readme
 
 
+def test_only_web_traffic_is_open_to_everyone():
+    # Let's Encrypt checks the domain from addresses it doesn't publish, so Caddy's ports are
+    # open to all (443 on UDP too, for HTTP/3). SSH is only ever let in from one address.
+    readme = (AWS / "README.md").read_text()
+    rules = re.findall(
+        r"authorize-security-group-ingress[^\n]*\\\n\s*--protocol (\w+) --port (\d+) --cidr ([^\n]+)",
+        readme,
+    )
+    open_to_all = {(protocol, port) for protocol, port, cidr in rules if cidr == "0.0.0.0/0"}
+    assert open_to_all == {("tcp", "80"), ("tcp", "443"), ("udp", "443")}
+    ssh = [cidr for protocol, port, cidr in rules if port == "22"]
+    assert ssh
+    assert all(cidr.endswith('/32"') for cidr in ssh)
+
+
 def test_first_boot_stops_at_the_first_failing_command():
     script = (AWS / "ec2-user-data.sh").read_text()
     assert script.startswith("#!/bin/bash\n")

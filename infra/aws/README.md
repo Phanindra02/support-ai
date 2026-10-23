@@ -104,7 +104,7 @@ One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of 
 - **IAM role `support-ai-server`** gives the server's programs AWS credentials, through the instance metadata service, so no AWS keys are stored on it. `ec2-permissions.json` allows only what the app does: save uploads under `uploads/` in the docs bucket, pull the API image from ECR, and read the database's URL from Parameter Store. A role reaches an instance through an instance profile of the same name.
 - **IMDSv2 only, with a hop limit of 2.** IMDSv2 needs a token from a PUT request first, which blocks the classic attack where a server is tricked into fetching the metadata URL and leaking its credentials. The hop limit of 2 lets a container reach the metadata service: compose's network adds one hop, and at the default of 1 the API couldn't get the role's credentials.
 - **`ec2-user-data.sh`** runs once at first boot. It installs Docker with the compose plugin, sets up ECR logins through the instance role, and adds 2 GB of swap.
-- **Security group `support-ai-server`** is the firewall. It lets in SSH (port 22) only from the Mac's public IP. The API and n8n listen only on the server's 127.0.0.1, as on the Mac, and nothing else is let in until Caddy serves HTTPS on 80 and 443.
+- **Security group `support-ai-server`** is the firewall. It lets in SSH (port 22) only from the Mac's public IP, and web traffic (80 and 443) from everyone, for Caddy ([below](#https-the-domain-and-caddy)). The API and n8n listen only on the server's 127.0.0.1, as on the Mac.
 - **SSH key** `~/.ssh/support-ai-ec2` is made on the Mac. Only its public half goes to AWS, as the key pair `support-ai`.
 - **Elastic IP:** a fixed public address, so the domain and Twilio's webhook keep working after the instance stops and starts.
 - **The disk** is 20 GB of encrypted gp3. **Termination protection** is on, so the instance can't be deleted by mistake.
@@ -201,7 +201,7 @@ docker compose exec api python -m scripts.create_agent --email you@example.com -
 
 `--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty, so the WhatsApp webhook answers 503 and alerts are skipped until they're set. Once the database and the secrets below are set up, the app loads every secret from Parameter Store instead, and the server's `.env` holds none of them.
 
-Until Caddy serves HTTPS, nothing but SSH is open, so reach the API and n8n through an SSH tunnel. Then http://localhost:8001/docs on the Mac is the server's API, and http://localhost:5679 its n8n:
+The API is public through Caddy, at https://support.mysolospark.com ([below](#https-the-domain-and-caddy)), but n8n's editor never is. Reach it through an SSH tunnel. Then http://localhost:5679 on the Mac is the server's n8n, and http://localhost:8001/docs its API, straight from the server without Caddy:
 
 ```bash
 ssh -i ~/.ssh/support-ai-ec2 -N -L 8001:localhost:8000 -L 5679:localhost:5678 ubuntu@"$SERVER_IP"
@@ -422,4 +422,58 @@ aws ssm describe-parameters --region us-east-2 \
 # On the server: the container has no secret in its environment, and the app still has them.
 docker compose exec -T api sh -c 'env | grep -cE "^(DATABASE_URL|JWT_SECRET_KEY)=."' </dev/null
 docker compose exec -T api python -c "from app.config import settings; print(settings.database_url.split('@')[1])" </dev/null
+```
+
+## HTTPS (the domain and Caddy)
+
+The API is at `https://support.mysolospark.com`. The developer owns `mysolospark.com`, whose DNS is on Cloudflare's free plan, and `support` is an A record there pointing at the server's Elastic IP, `18.117.40.156`. The rest of the domain is left as it was.
+
+- **The record is "DNS only"** (the grey cloud in Cloudflare), not proxied. Proxied, every request would reach the server from Cloudflare's addresses, with its HTTPS ended at Cloudflare, so the rate limit would need Caddy to trust Cloudflare's address ranges to find each client. DNS only, browsers and Twilio connect straight to Caddy.
+- **Caddy** (`Caddyfile`, and the `caddy` service in `compose.ec2.yml`) answers on ports 80 and 443. Because its config names a domain, it gets a certificate for it from Let's Encrypt, a free certificate authority, renews it well before it expires, and redirects plain HTTP to HTTPS. To get one, it proves the server controls the name: Let's Encrypt asks for a token, and Caddy answers it on port 80 or 443.
+- **Caddy runs on the server's own network** (`network_mode: host`), and passes each request to the API at `127.0.0.1:8000`, the port the API already publishes there. That's how ngrok reached the API on the Mac, and it works for the same reason: those connections arrive from the compose network's gateway, `172.28.0.1`, the only address the API trusts `X-Forwarded-For` and `X-Forwarded-Proto` from (`FORWARDED_ALLOW_IPS`). So the rate limit counts each client's real address, and the Twilio check rebuilds the `https://` URL Twilio signed. Inside compose's network, Caddy would get whatever address Docker handed out, which the API couldn't name in advance.
+- **A client can't make up its address.** Caddy replaces any `X-Forwarded-For` a client sends with the address the connection really came from. It would keep the client's only for proxies listed in `trusted_proxies`, and there are none.
+- **The certificates live in the `caddy-data` volume**, so a new Caddy container doesn't ask for new ones. Let's Encrypt allows 5 certificates a week for the same name.
+- **Ports 80 and 443 are open to everyone.** Let's Encrypt checks the name from addresses it doesn't publish, so they can't be narrowed. 443 is open on UDP too, for HTTP/3, which Caddy serves alongside HTTP/1.1 and HTTP/2.
+
+Cost: nothing new. Caddy, Let's Encrypt, Cloudflare's DNS, and security group rules are free, and data out of AWS is free up to 100 GB a month. The domain renews once a year.
+
+### Open the ports
+
+```bash
+SG_ID=$(aws ec2 describe-security-groups --region us-east-2 \
+  --group-names support-ai-server --query 'SecurityGroups[0].GroupId' --output text)
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id "$SG_ID" \
+  --protocol tcp --port 80 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id "$SG_ID" \
+  --protocol tcp --port 443 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id "$SG_ID" \
+  --protocol udp --port 443 --cidr 0.0.0.0/0
+```
+
+### Start Caddy
+
+Open the ports first. If Let's Encrypt can't reach the server, Caddy keeps retrying, but more slowly each time.
+
+```bash
+# On the server. COMPOSE_FILE in .env already makes compose read compose.ec2.yml.
+cd ~/support-ai && git pull && docker compose pull
+docker compose up -d --no-build
+docker compose logs caddy | grep "certificate obtained"
+```
+
+Caddy reads the Caddyfile only when it starts, so after changing it, run `docker compose restart caddy`.
+
+### Check it
+
+```bash
+# On the Mac. The certificate is Let's Encrypt's, for this name:
+echo | openssl s_client -connect support.mysolospark.com:443 -servername support.mysolospark.com \
+    2>/dev/null | openssl x509 -noout -issuer -subject -enddate
+curl -sI https://support.mysolospark.com/docs | head -1
+# Plain HTTP is redirected to HTTPS:
+curl -sI http://support.mysolospark.com/docs | grep -iE '^(HTTP|location)'
+# A made-up X-Forwarded-For is ignored. The API's log shows the Mac's real address:
+curl -s -o /dev/null -H "X-Forwarded-For: 1.2.3.4" https://support.mysolospark.com/docs
+ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP" \
+  "cd support-ai && docker compose logs --tail 3 api" </dev/null
 ```

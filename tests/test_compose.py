@@ -118,12 +118,17 @@ def test_no_secret_is_written_in_the_file(services, api_environment):
 
 
 @pytest.fixture(scope="module")
-def ec2_services():
-    return yaml.load(EC2_COMPOSE_FILE.read_text(), Loader=ComposeLoader)["services"]
+def ec2_compose():
+    return yaml.load(EC2_COMPOSE_FILE.read_text(), Loader=ComposeLoader)
 
 
-def test_on_ec2_only_the_database_changes(ec2_services):
-    assert set(ec2_services) == {"api", "migrate", "postgres"}
+@pytest.fixture(scope="module")
+def ec2_services(ec2_compose):
+    return ec2_compose["services"]
+
+
+def test_on_ec2_the_database_changes_and_caddy_is_added(ec2_services):
+    assert set(ec2_services) == {"api", "migrate", "postgres", "caddy"}
 
 
 def test_on_ec2_the_api_and_its_migrations_load_their_secrets_from_parameter_store(ec2_services):
@@ -147,3 +152,65 @@ def test_the_servers_env_turns_the_ec2_file_on():
     assert f"# {line}" in (PROJECT_ROOT / ".env.example").read_text()
     for path in line.split("=", 1)[1].split(":"):
         assert (PROJECT_ROOT / path).exists()
+
+
+# Caddy, which serves the API over HTTPS on EC2 (infra/aws/Caddyfile).
+
+CADDYFILE = PROJECT_ROOT / "infra" / "aws" / "Caddyfile"
+DOMAIN = "support.mysolospark.com"
+
+
+@pytest.fixture(scope="module")
+def caddy(ec2_services):
+    return ec2_services["caddy"]
+
+
+@pytest.fixture(scope="module")
+def caddyfile():
+    # The Caddyfile's lines, without comments or blank lines.
+    lines = (line.strip() for line in CADDYFILE.read_text().splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def test_caddy_gets_a_certificate_for_the_domain(caddyfile):
+    # A domain name turns on automatic HTTPS. A port like ":80", "http://", or an IP address
+    # would serve plain HTTP instead.
+    assert caddyfile[0] == f"{DOMAIN} {{"
+
+
+def test_caddy_passes_requests_to_the_apis_port_on_the_server(services, caddy, caddyfile):
+    # The port docker-compose.yml publishes on 127.0.0.1, reached from the server's own network.
+    [published] = services["api"]["ports"]
+    api_address = published.rsplit(":", 1)[0]
+    assert f"reverse_proxy {api_address}" in caddyfile
+    assert caddy["network_mode"] == "host"
+
+
+def test_on_ec2_forwarded_headers_are_still_only_trusted_from_the_gateway(ec2_services):
+    # Caddy's connections to 127.0.0.1:8000 arrive from the gateway, so docker-compose.yml's
+    # setting stays as it is. Widening it would let other containers choose the client's IP.
+    assert "FORWARDED_ALLOW_IPS" not in ec2_services["api"]["environment"]
+
+
+def test_caddy_replaces_the_forwarded_headers_clients_send():
+    # trusted_proxies would make Caddy keep a client's X-Forwarded-For, and the API would then
+    # trust whatever address the client made up.
+    assert "trusted_proxies" not in CADDYFILE.read_text()
+
+
+def test_caddy_reads_the_caddyfile_from_the_repo(caddy):
+    # Relative to the project root, where docker-compose.yml is, like every path compose reads.
+    assert "./infra/aws/Caddyfile:/etc/caddy/Caddyfile:ro" in caddy["volumes"]
+    assert CADDYFILE.exists()
+
+
+def test_caddy_keeps_its_certificates_when_the_container_is_replaced(ec2_compose, caddy):
+    # Let's Encrypt allows 5 certificates a week for the same name.
+    assert "caddy-data:/data" in caddy["volumes"]
+    assert "caddy-data" in ec2_compose["volumes"]
+
+
+def test_caddy_stays_on_its_major_version(caddy):
+    # Bug and security fixes on each pull, but never a surprise move to Caddy 3.
+    assert caddy["image"] == "caddy:2"
+    assert caddy["restart"] == "unless-stopped"
