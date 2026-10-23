@@ -81,7 +81,7 @@ Every push, to any branch, runs [.github/workflows/ci.yml](.github/workflows/ci.
 
 - **lint** runs `uv run ruff check .`.
 - **test** runs `uv run pytest`, against Postgres 16 and Redis 8 started as service containers next to the job. Each run makes its own random `JWT_SECRET_KEY`.
-- **image** runs once both pass. It builds the API's image on an ARM runner, and checks that it starts and doesn't run as root. On `main` it then pushes the image to GitHub Container Registry as `ghcr.io/phanindra02/support-ai-api`, tagged `sha-<commit>` (which never changes) and `latest`. No settings or secrets go into the image, so it's safe to publish. They're given to a container when it runs.
+- **image** runs once both pass. It builds the API's image on an ARM runner, and checks that it starts and doesn't run as root. On `main` it then pushes the image to Amazon ECR as `support-ai-api`, tagged `sha-<commit>` (which ECR never lets change) and `latest`, for EC2 to pull. CI logs in to AWS with a short-lived token from GitHub (OIDC), so no AWS keys are stored in GitHub. [infra/aws/README.md](infra/aws/README.md) explains the role it uses. No settings or secrets go into the image. They're given to a container when it runs.
 
 Both install with `uv sync --locked`, which fails if `uv.lock` is out of date, and use the same uv version as the Mac and the Dockerfile. To run the same checks before pushing: `uv run ruff check . && uv run pytest`.
 

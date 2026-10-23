@@ -1,5 +1,5 @@
 # Lints and tests every push, to any branch, then builds the API's image. Pushes to main also
-# publish the image to GitHub Container Registry.
+# publish the image to Amazon ECR, where EC2 pulls it from.
 name: CI
 
 on:
@@ -80,10 +80,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
-      packages: write # to push to GitHub Container Registry
-    env:
-      # Registry names must be lowercase, so this can't come from github.repository_owner.
-      IMAGE: ghcr.io/phanindra02/support-ai-api
+      # Lets the job ask GitHub for a signed token that says which repo and branch it runs
+      # for, which AWS swaps for short-lived credentials. It gives no write access to anything.
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -115,23 +114,33 @@ jobs:
             http://localhost:8000/
           docker rm -f api
 
-      # From here on, only for pushes to main, which is what a merged pull request is.
-      - name: Log in to GitHub Container Registry
+      # From here on, only for pushes to main, which is what a merged pull request is. The
+      # role's trust policy (infra/aws/github-ci-trust-policy.json) refuses every other branch,
+      # so these steps would fail anywhere else anyway. No AWS keys are stored in GitHub.
+      - name: Log in to AWS as the CI role
         if: github.ref == 'refs/heads/main'
-        uses: docker/login-action@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # A repo variable rather than written here, so the public repo doesn't show the
+          # account number. The account number is also masked in the logs.
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-2
+          mask-aws-account-id: true
 
-      # Two tags: sha-<commit> never changes, so a deploy or rollback can name an exact build,
-      # and latest moves to each new build. The labels link the image to this repo on GitHub.
+      - name: Log in to ECR
+        if: github.ref == 'refs/heads/main'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Two tags: sha-<commit> never changes (ECR refuses to overwrite it), so a deploy or
+      # rollback can name an exact build, and latest moves to each new build. The labels link
+      # the image to this repo on GitHub.
       - name: Choose tags and labels
         if: github.ref == 'refs/heads/main'
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ steps.ecr.outputs.registry }}/support-ai-api
           tags: |
             type=sha
             type=raw,value=latest
@@ -147,3 +156,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+          # Without this, buildx adds a build record that ECR lists as a second, untagged image
+          # beside each real one. A plain image keeps the registry to one image per build.
+          provenance: false

@@ -43,3 +43,56 @@ aws s3api get-public-access-block --bucket support-ai-docs-phanindra02
 aws s3api get-bucket-policy --bucket support-ai-docs-phanindra02 --query Policy --output text
 aws s3api get-bucket-encryption --bucket support-ai-docs-phanindra02
 ```
+
+## The image registry (ECR)
+
+CI pushes the API's image to `support-ai-api` in ECR, Amazon's container registry. EC2 pulls it from there with its own IAM role, so the server never needs a registry password.
+
+- **`sha-` tags can never be overwritten** (`IMMUTABLE_WITH_EXCLUSION`). `sha-<commit>` always names the exact build of that commit, which is what a rollback relies on ([docs/rollback.md](../../docs/rollback.md)). Only `latest` is excluded, so it can move to each new build.
+- **Every push is scanned** for known vulnerabilities in the image's OS packages (basic scanning, which is free). The results are in the ECR console.
+- **`ecr-lifecycle-policy.json`** keeps the 10 newest builds and deletes older ones, plus anything left untagged, so storage doesn't grow forever.
+
+Cost: $0.10 per GB-month of stored images. Builds share most of their layers, so 10 of them come to a few hundred MB, about $0.05 a month. Pulling to EC2 in the same region is free.
+
+## How CI logs in to AWS (OIDC)
+
+CI has no AWS keys. GitHub gives each workflow run a short-lived signed token (OpenID Connect) saying which repo and branch it's running for. AWS checks the signature, and if the token matches the role's trust policy, hands back credentials that expire within an hour. Nothing long-lived can leak from the repo or its logs.
+
+- **`github-ci-trust-policy.json`** says who may use the role: only runs for pushes to `main` of this repo. The token's audience must be `sts.amazonaws.com`, so a token GitHub issued for some other service doesn't work here.
+  - The repo was created after July 15, 2026, so GitHub's tokens use immutable subjects, which carry the owner and repo ids: `repo:Phanindra02@60551624/support-ai@1424736820:...`. If the repo were deleted and someone made a new one with the same name, its ids would differ, so its runs couldn't use the role. `gh api repos/Phanindra02/support-ai/actions/oidc/customization/sub` shows the prefix.
+  - Branches and pull requests get a different subject, so they can build the image but never push it.
+- **`github-ci-permissions.json`** says what the role may do: log in to ECR, and push to `support-ai-api` only. `GetAuthorizationToken` has to be `"*"`, because AWS doesn't let it be limited to one repository.
+
+`ACCOUNT_ID` in both files stands for the AWS account number, filled in when they're applied, so the public repo doesn't show it. The workflow reads the role's ARN from the repo variable `AWS_ROLE_ARN`, for the same reason, and masks the account number in its logs.
+
+### Create them
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+aws ecr create-repository --repository-name support-ai-api --region us-east-2 \
+  --image-tag-mutability IMMUTABLE_WITH_EXCLUSION \
+  --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest \
+  --image-scanning-configuration scanOnPush=true
+aws ecr put-lifecycle-policy --repository-name support-ai-api --region us-east-2 \
+  --lifecycle-policy-text file://infra/aws/ecr-lifecycle-policy.json
+
+# Once per account: lets IAM trust GitHub's tokens. AWS checks GitHub's certificate itself.
+aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+aws iam create-role --role-name support-ai-ci-push-image \
+  --description "GitHub Actions on main pushes the API image to ECR" \
+  --assume-role-policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/github-ci-trust-policy.json)"
+aws iam put-role-policy --role-name support-ai-ci-push-image --policy-name push-api-image \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/github-ci-permissions.json)"
+
+gh variable set AWS_ROLE_ARN --body "arn:aws:iam::${ACCOUNT_ID}:role/support-ai-ci-push-image"
+```
+
+### Check them
+
+```bash
+aws ecr describe-repositories --repository-names support-ai-api --region us-east-2
+aws ecr list-images --repository-name support-ai-api --region us-east-2
+aws iam get-role --role-name support-ai-ci-push-image --query Role.AssumeRolePolicyDocument
+```
