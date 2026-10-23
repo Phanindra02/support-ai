@@ -81,8 +81,8 @@ def upload_document(file: UploadFile, db: SessionDep, agent: CurrentAgent, s3: S
     if "\x00" in filename:
         raise invalid_file("The file's name can't contain the NUL character (\\u0000)")
 
-    # This runs after the whole upload has arrived, so it can't stop a huge upload from
-    # filling the disk. Caddy, in front of the API later in Stage 5, will limit body size.
+    # The app's body limit (app/body_limit.py) has already stopped anything much bigger as it
+    # arrived. This catches a file just over 10 MiB, which fits in the form's spare room.
     size = file_size(file)
     if size > MAX_PDF_BYTES:
         raise HTTPException(status_code=413, detail="The file is over 10 MiB")

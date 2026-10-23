@@ -64,7 +64,7 @@ Then open http://localhost:8000/docs for the API, and http://localhost:5678 for 
 - **Only the API and n8n are reachable from the Mac,** and only at `127.0.0.1`. Postgres and Redis have no published ports, so they can't clash with the ones from Homebrew. For a database shell: `docker compose exec postgres psql -U support`.
 - **Data lives in volumes.** The `postgres-data` and `n8n-data` volumes survive `docker compose down`. `docker compose down -v` deletes them.
 - **Ports 8000 and 5678 are also the ones `uvicorn` and `npx n8n` use,** so stop those first.
-- **Uploads get a 503 in compose on the Mac,** because the container has no AWS credentials, and `~/.aws` isn't shared with it on purpose. On EC2, later in Stage 5, the instance's IAM role gives the container its own.
+- **Uploads get a 503 in compose on the Mac,** because the container has no AWS credentials, and `~/.aws` isn't shared with it on purpose. On EC2, later in Stage 5, the instance's IAM role gives the container its own. That needs the instance's metadata hop limit set to 2: a container on compose's network is one hop further from the metadata service than the instance itself, and at the default of 1 it gets no credentials.
 - **WhatsApp works the same way.** Run `ngrok http 8000` as before. The API trusts ngrok's forwarded headers only from the Docker network's gateway, `172.28.0.1`. That's where ngrok's connections arrive, and no client can choose that address. `docker-compose.yml` explains why that matters.
 
 ```bash
@@ -333,6 +333,7 @@ curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.
 ```
 
 - **Only PDFs, up to 10 MiB.** The file must start with `%PDF-`, as every PDF does. The filename and Content-Type are whatever the client says, so neither is trusted. Anything else gets a 422, and a bigger file gets a 413.
+- **Oversized requests are stopped as they arrive.** FastAPI reads a whole body before it checks the login, so `app/body_limit.py` refuses any request body over about 10 MiB with a 413 first: at once if its `Content-Length` says so, or as soon as that many bytes have arrived if it doesn't. Without it, anyone could make the server write an upload of any size to disk. It covers every endpoint, so no JSON body can fill the memory either.
 - **The filename** is trimmed, must be 1 to 255 characters, and can't contain the NUL character. It's only ever shown, never used as a path.
 - **Each upload gets its own key** in S3, like `uploads/7020...001c.pdf`, made from a random UUID. Two files named `manual.pdf` never overwrite each other. The key stays out of the response.
 - **S3 first, then the database.** The row is saved only once the file is in S3, so a row never points to a missing file.
@@ -349,7 +350,7 @@ curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.
 | 404 Not Found | No ticket or agent has that id |
 | 409 Conflict | An agent with that email already exists |
 | 422 Unprocessable Content | The input breaks a rule: a missing, unknown, or invalid field, or an id, `skip`, or `limit` out of range |
-| 413 Content Too Large | An uploaded file is over 10 MiB |
+| 413 Content Too Large | An uploaded file is over 10 MiB, or any request body is over the app's limit |
 | 429 Too Many Requests | This IP made more than 60 requests in the last 60 seconds |
 | 503 Service Unavailable | A setting the endpoint needs is empty (`TWILIO_AUTH_TOKEN` or `S3_BUCKET`), or S3 couldn't save an upload |
 
