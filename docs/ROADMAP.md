@@ -119,7 +119,7 @@ Every resource in this stage costs money. Give the expected monthly cost and get
 - [x] Save uploads to S3 with boto3, and record each one in a documents table as "uploaded." Built in the same commit as the endpoint, which has nothing to return until an upload is saved.
 - [x] Create an ECR repository and switch CI to push images there. CI logs in with GitHub's OIDC token, so no AWS keys are stored in GitHub. See `infra/aws/README.md`.
 - [x] Launch a Graviton EC2 instance (t4g family) with an IAM role for S3 and ECR, install Docker, and run the stack with docker compose. A t4g.small running Ubuntu 24.04, pulling CI's image from ECR.
-- [ ] Create the smallest RDS PostgreSQL instance, and allow connections only from the EC2 instance.
+- [x] Create the smallest RDS PostgreSQL instance, and allow connections only from the EC2 instance. A `db.t4g.micro` on PostgreSQL 16.15 with no public address, whose security group lets in only the server's security group. The URL with its password is in Parameter Store.
 - [ ] Run the Alembic migrations on RDS and switch the API over to it.
 - [ ] Store secrets in AWS Systems Manager Parameter Store and load them when the app starts.
 - [ ] **[You]** Buy a cheap domain. Point it at the instance, and put Caddy in front of the API for free automatic HTTPS.
