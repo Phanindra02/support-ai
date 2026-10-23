@@ -97,7 +97,7 @@ Done when: one command starts the whole stack in containers, and GitHub Actions 
 - [x] Move all settings and secrets into the git-ignored `.env`, keep `.env.example` current, and add a `.dockerignore`. The `.dockerignore` came with the Dockerfile, which needed it.
 - [x] Add a GitHub Actions workflow that runs on every push: install dependencies with uv, lint with ruff, and run pytest.
 - [x] Run those tests against a Postgres service container inside the workflow. Redis runs as one too, since the tests need it.
-- [ ] On merges to main, build the image on GitHub's ARM runner (`ubuntu-24.04-arm`) and push it to GitHub Container Registry.
+- [x] On merges to main, build the image on GitHub's ARM runner (`ubuntu-24.04-arm`) and push it to GitHub Container Registry. Published as `ghcr.io/phanindra02/support-ai-api`; anyone can pull it, since the repo is public.
 - [ ] Protect the main branch so nothing merges unless CI passes. From here on, work on branches and open pull requests.
 
 ### System design
