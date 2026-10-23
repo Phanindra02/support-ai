@@ -4,7 +4,10 @@
     {
       "Sid": "SaveUploadedDocs",
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:AbortMultipartUpload"],
+      "Action": [
+        "s3:PutObject",
+        "s3:AbortMultipartUpload"
+      ],
       "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/uploads/*"
     },
     {
@@ -28,6 +31,18 @@
       "Effect": "Allow",
       "Action": "ssm:GetParametersByPath",
       "Resource": "arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter/support-ai"
+    },
+    {
+      "Sid": "TalkToSystemsManager",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ],
+      "Resource": "*"
     }
   ]
 }

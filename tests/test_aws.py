@@ -105,7 +105,12 @@ def test_only_pushes_to_main_of_this_repo_can_use_the_ci_role(trust_policy):
 
 def test_the_ci_role_can_only_log_in_to_ecr_and_push_one_image(ci_permissions):
     statements = {statement["Sid"]: statement for statement in ci_permissions["Statement"]}
-    assert set(statements) == {"LogInToEcr", "PushTheApiImage"}
+    assert set(statements) == {
+        "LogInToEcr",
+        "PushTheApiImage",
+        "RunTheDeployOnTheServer",
+        "ReadTheDeploysResult",
+    }
     assert all(statement["Effect"] == "Allow" for statement in statements.values())
     # GetAuthorizationToken can't be limited to a repository, so it's the only "*".
     assert statements["LogInToEcr"]["Action"] == "ecr:GetAuthorizationToken"
@@ -162,6 +167,7 @@ def test_the_server_can_pull_the_api_image_but_never_push(server_permissions):
         "LogInToEcr",
         "PullTheApiImage",
         "LoadTheAppSecrets",
+        "TalkToSystemsManager",
     }
     pull = server_permissions["PullTheApiImage"]
     assert set(pull["Action"]) == {

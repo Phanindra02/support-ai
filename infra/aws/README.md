@@ -572,3 +572,51 @@ aws logs tail /aws/lambda/support-ai-extract-text --region us-east-2 --since 1h
 # The text it saved:
 aws s3 ls s3://support-ai-docs-phanindra02/text/
 ```
+
+## Deploying from CI (Systems Manager)
+
+After each merge to `main`, CI's `deploy` job puts the new image on the server. It doesn't use SSH: the firewall lets SSH in only from the Mac, and GitHub's runners use thousands of changing addresses. Instead, CI asks AWS Systems Manager to run `deploy-document.json` on the server. The SSM agent that comes with Ubuntu's AWS images picks the command up over its own outbound connection, so no port is opened and no SSH key is stored in GitHub.
+
+- **The deploy document** takes one parameter, the commit's full id, which must be 40 hex digits: SSM pastes the value into the script, so anything else could run as root. As the `ubuntu` user, it fast-forwards the server's checkout to that commit, sets `API_IMAGE` in `.env` to that commit's image (`sha-` and its first 7 characters, which CI just pushed), then runs `docker compose pull` and `up -d --no-build`. The migrations run first, as they do on every `up`.
+- **The CI role** may run only that document, only on this instance (`RunTheDeployOnTheServer` in `github-ci-permissions.json`), and read the result. It can't use `AWS-RunShellScript`, which would let it run any command.
+- **The server's role** gets the five actions the agent needs to register and take commands (`TalkToSystemsManager`), and not AWS's `AmazonSSMManagedInstanceCore`, which would also let it read every parameter in the account.
+- **The job** runs only on `main`, after `image`, one deploy at a time in merge order. It waits for the command's result, prints its output, fails the run if the deploy failed, and then checks `https://support.mysolospark.com/` answers.
+- **Rolling back** is the same document with an older commit on `main`: the checkout stays where it is (`--ff-only` never moves backwards), and `API_IMAGE` goes back to that commit's image ([docs/rollback.md](../../docs/rollback.md)).
+- **A shell without SSH:** with the agent registered, `aws ssm start-session --target "$INSTANCE_ID"` (with the Session Manager plugin, `brew install --cask session-manager-plugin`) or the EC2 console's Connect button opens one, wherever the Mac's address has moved.
+
+Cost: nothing. Run Command and Session Manager are free for EC2.
+
+### Set it up
+
+```bash
+# On the Mac, from the project root.
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+INSTANCE_ID=$(aws ec2 describe-instances --region us-east-2 \
+  --filters Name=tag:Name,Values=support-ai Name=instance-state-name,Values=running \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
+aws iam put-role-policy --role-name support-ai-ci-push-image --policy-name push-api-image \
+  --policy-document "$(sed -e "s/ACCOUNT_ID/$ACCOUNT_ID/" -e "s/INSTANCE_ID/$INSTANCE_ID/" infra/aws/github-ci-permissions.json)"
+aws ssm create-document --region us-east-2 --name support-ai-deploy --document-type Command \
+  --document-format JSON --content file://infra/aws/deploy-document.json --query DocumentDescription.Status
+gh variable set SERVER_INSTANCE_ID --body "$INSTANCE_ID"
+```
+
+The agent tries to register again by itself, with growing waits. To make it try now, on the server: `sudo snap restart amazon-ssm-agent`. Then this lists the server as `Online`:
+
+```bash
+aws ssm describe-instance-information --region us-east-2 \
+  --query 'InstanceInformationList[].[InstanceId,PingStatus,AgentVersion]' --output table
+```
+
+After changing `deploy-document.json`, publish it as a new version and make that the default:
+
+```bash
+aws ssm update-document --region us-east-2 --name support-ai-deploy --document-version '$LATEST' \
+  --document-format JSON --content file://infra/aws/deploy-document.json
+aws ssm update-document-default-version --region us-east-2 --name support-ai-deploy \
+  --document-version "$(aws ssm describe-document --region us-east-2 --name support-ai-deploy \
+    --query Document.LatestVersion --output text)"
+```

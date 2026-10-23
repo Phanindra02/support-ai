@@ -19,6 +19,21 @@
         "ecr:UploadLayerPart"
       ],
       "Resource": "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+    },
+    {
+      "Sid": "RunTheDeployOnTheServer",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:us-east-2:ACCOUNT_ID:document/support-ai-deploy",
+        "arn:aws:ec2:us-east-2:ACCOUNT_ID:instance/INSTANCE_ID"
+      ]
+    },
+    {
+      "Sid": "ReadTheDeploysResult",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*"
     }
   ]
 }

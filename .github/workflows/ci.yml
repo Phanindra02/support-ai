@@ -159,3 +159,46 @@ jobs:
           # Without this, buildx adds a build record that ECR lists as a second, untagged image
           # beside each real one. A plain image keeps the registry to one image per build.
           provenance: false
+
+  # Puts each new image on the EC2 server. CI asks AWS Systems Manager to run the deploy
+  # document there (infra/aws/deploy-document.json), so no port is opened and no SSH key is
+  # stored in GitHub. The CI role may run only that document, only on that server.
+  deploy:
+    needs: image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # One deploy at a time, in merge order. A newer one waits instead of cutting one off.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      INSTANCE_ID: ${{ vars.SERVER_INSTANCE_ID }}
+    steps:
+      - name: Log in to AWS as the CI role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-2
+          mask-aws-account-id: true
+
+      # The image job pushed sha-<first 7 of this commit>, which the document runs.
+      - name: Deploy this commit on the server
+        run: |
+          id=$(aws ssm send-command --document-name support-ai-deploy \
+            --instance-ids "$INSTANCE_ID" --parameters "commit=$GITHUB_SHA" \
+            --comment "Deploy $GITHUB_SHA" --query Command.CommandId --output text)
+          # Checks every 5 seconds, for up to 100. A failed deploy shows its output below.
+          aws ssm wait command-executed --command-id "$id" --instance-id "$INSTANCE_ID" || true
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
+            --query '[Status, StandardOutputContent, StandardErrorContent]' --output text
+          status=$(aws ssm get-command-invocation --command-id "$id" \
+            --instance-id "$INSTANCE_ID" --query Status --output text)
+          test "$status" = Success
+
+      - name: Check the live API answers over HTTPS
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 3 \
+            https://support.mysolospark.com/
