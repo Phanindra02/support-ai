@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     # Mac and from the instance's IAM role on EC2.
     s3_bucket: str | None = None
 
+    # The Lambda sends this in the X-Webhook-Secret header when it has pulled out a PDF's
+    # text, so only it can mark documents processed. Until it's set, that webhook turns every
+    # request away.
+    lambda_webhook_secret: str | None = None
+
     # Where the project's AWS resources are.
     aws_region: str = "us-east-2"
 

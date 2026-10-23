@@ -1,22 +1,25 @@
 """Help docs: agents upload PDFs here, and in Stage 6 the WhatsApp bot answers from them.
 
-POST /documents saves the PDF to S3 and records it as "uploaded". Later in Stage 5, a Lambda
-pulls the text out of each upload and marks it "processed".
+POST /documents saves the PDF to S3 and records it as "uploaded". S3 then runs the Lambda in
+lambda/, which pulls out the text, saves it to S3 too, and calls
+POST /webhooks/document-processed to mark the document "processed".
 """
 
+import hmac
 import logging
 import os
 from typing import Annotated
 
 from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy import select
 
 from app.config import settings
 from app.database import SessionDep
-from app.models import Document
-from app.schemas import DocumentRead, ErrorResponse
+from app.models import Document, DocumentStatus
+from app.schemas import DocumentProcessed, DocumentRead, ErrorResponse
 from app.security import CurrentAgent, get_current_agent
 from app.storage import get_s3_client, new_upload_key, save_pdf
 
@@ -31,6 +34,9 @@ PDF_SIGNATURE = b"%PDF-"
 
 # The size of the filename column.
 MAX_FILENAME_LENGTH = 255
+
+# The header the Lambda sends the shared secret in, the same one the API sends n8n's in.
+SECRET_HEADER = "X-Webhook-Secret"
 
 S3Dep = Annotated[BaseClient, Depends(get_s3_client)]
 
@@ -105,4 +111,57 @@ def upload_document(file: UploadFile, db: SessionDep, agent: CurrentAgent, s3: S
     db.add(document)
     db.commit()
     db.refresh(document)
+    return document
+
+
+def verify_lambda_secret(secret: Annotated[str | None, Header(alias=SECRET_HEADER)] = None) -> None:
+    """Stop any request that doesn't carry the shared secret, with a 403."""
+    if not settings.lambda_webhook_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Document processing isn't set up: LAMBDA_WEBHOOK_SECRET is empty",
+        )
+    # compare_digest takes as long when the first character is wrong as when the last one is,
+    # so timing the answers can't reveal the secret a character at a time. It's given bytes,
+    # because with text it only accepts plain ASCII, and anything else would crash with a 500.
+    given = (secret or "").encode()
+    if not hmac.compare_digest(given, settings.lambda_webhook_secret.encode()):
+        raise HTTPException(status_code=403, detail="Wrong or missing X-Webhook-Secret")
+
+
+# The Lambda's call, on its own router: it has the shared secret rather than an agent's login.
+# Like Twilio's webhook, it skips the per-IP rate limit (app/main.py), since every call comes
+# from AWS's addresses, and the secret is checked before anything else.
+webhook_router = APIRouter(
+    prefix="/webhooks",
+    tags=["webhooks"],
+    dependencies=[Depends(verify_lambda_secret)],
+    responses={
+        403: {"model": ErrorResponse, "description": "Wrong or missing X-Webhook-Secret"},
+        503: {"model": ErrorResponse, "description": "LAMBDA_WEBHOOK_SECRET isn't set"},
+    },
+)
+
+
+@webhook_router.post(
+    "/document-processed",
+    response_model=DocumentRead,
+    responses={404: {"model": ErrorResponse, "description": "No document has that s3_key"}},
+)
+def mark_document_processed(update: DocumentProcessed, db: SessionDep):
+    """The Lambda calls this once it has saved a PDF's text to S3.
+
+    Calling it again for the same document changes nothing more, so the Lambda can safely
+    retry, and S3 can deliver the same upload's event twice.
+    """
+    document = db.scalar(select(Document).where(Document.s3_key == update.s3_key))
+    if document is None:
+        # Most likely the upload's row isn't saved yet: the PDF reaches S3, which starts the
+        # Lambda, just before POST /documents saves it. The Lambda retries a minute later.
+        raise HTTPException(status_code=404, detail="No document has that s3_key")
+    document.status = DocumentStatus.processed
+    document.text_s3_key = update.text_s3_key
+    db.commit()
+    db.refresh(document)
+    logger.info("Document %s is processed", document.id)
     return document

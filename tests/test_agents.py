@@ -8,7 +8,14 @@ from app.routers.tickets import get_or_create_customer
 
 # The only endpoints that don't need an agent's login. Twilio's webhook proves who sent it with
 # a signature instead.
-PUBLIC = {("GET", "/"), ("POST", "/auth/token"), ("POST", "/webhooks/twilio")}
+# No agent login. The webhooks check something else instead: Twilio's signature, or the
+# Lambda's shared secret (tests/test_whatsapp.py and tests/test_document_processed.py).
+PUBLIC = {
+    ("GET", "/"),
+    ("POST", "/auth/token"),
+    ("POST", "/webhooks/twilio"),
+    ("POST", "/webhooks/document-processed"),
+}
 
 TICKET_ENDPOINTS = [
     ("POST", "/tickets"),

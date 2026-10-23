@@ -1,0 +1,15 @@
+{
+  "FunctionName": "support-ai-extract-text",
+  "Description": "Pulls the text out of each help-doc PDF uploaded to S3",
+  "Runtime": "python3.14",
+  "Architectures": ["arm64"],
+  "Handler": "extract_text.handler",
+  "MemorySize": 512,
+  "Timeout": 60,
+  "Environment": {
+    "Variables": {
+      "API_URL": "https://support.mysolospark.com",
+      "SECRET_PARAMETER": "/support-ai/LAMBDA_WEBHOOK_SECRET"
+    }
+  }
+}

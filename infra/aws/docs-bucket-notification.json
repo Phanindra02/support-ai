@@ -1,0 +1,17 @@
+{
+  "LambdaFunctionConfigurations": [
+    {
+      "Id": "extract-text-from-uploads",
+      "LambdaFunctionArn": "arn:aws:lambda:us-east-2:ACCOUNT_ID:function:support-ai-extract-text",
+      "Events": ["s3:ObjectCreated:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            { "Name": "prefix", "Value": "uploads/" },
+            { "Name": "suffix", "Value": ".pdf" }
+          ]
+        }
+      }
+    }
+  ]
+}

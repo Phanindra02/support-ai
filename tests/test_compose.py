@@ -109,7 +109,12 @@ def test_no_secret_is_written_in_the_file(services, api_environment):
     # Secrets come from .env, through env_file or ${...}.
     assert "${POSTGRES_PASSWORD" in services["postgres"]["environment"]["POSTGRES_PASSWORD"]
     assert make_url(api_environment["DATABASE_URL"]).password.startswith("${POSTGRES_PASSWORD")
-    secret_settings = {"JWT_SECRET_KEY", "TWILIO_AUTH_TOKEN", "N8N_WEBHOOK_SECRET"}
+    secret_settings = {
+        "JWT_SECRET_KEY",
+        "TWILIO_AUTH_TOKEN",
+        "N8N_WEBHOOK_SECRET",
+        "LAMBDA_WEBHOOK_SECRET",
+    }
     assert not secret_settings & api_environment.keys()
     assert services["api"]["env_file"] == ".env"
 

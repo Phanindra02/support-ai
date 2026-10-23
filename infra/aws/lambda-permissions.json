@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadUploadedDocs",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/uploads/*"
+    },
+    {
+      "Sid": "SaveTheirText",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/text/*"
+    },
+    {
+      "Sid": "ReadTheWebhookSecret",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter/support-ai/LAMBDA_WEBHOOK_SECRET"
+    },
+    {
+      "Sid": "WriteLogs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-east-2:ACCOUNT_ID:log-group:/aws/lambda/support-ai-extract-text:*"
+    }
+  ]
+}

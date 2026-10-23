@@ -116,8 +116,9 @@ If `main` moves on while a pull request is open, the branch has to be brought up
 | `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | Agents | 200 |
 | `POST` | `/documents` | Upload a help doc (a PDF) to S3 | Agents | 201 |
 | `POST` | `/webhooks/twilio` | Receive a customer's WhatsApp message | Twilio | 200 |
+| `POST` | `/webhooks/document-processed` | Mark a help doc processed, once its text is in S3 | The Lambda | 200 |
 
-"Agents" means any logged-in agent, admins included. Every endpoint except logging in and the Twilio webhook needs the token described next. The curl examples below leave the header out to stay short.
+"Agents" means any logged-in agent, admins included. Every endpoint except logging in and the two webhooks needs the token described next. The curl examples below leave the header out to stay short.
 
 ### Log in
 
@@ -321,7 +322,7 @@ To run n8n, connect Slack, and import the workflow, follow [infra/n8n/README.md]
 
 ### Upload a help doc
 
-An agent sends a PDF as the multipart form field `file`. The API saves it to the private S3 bucket and records it as `uploaded`. Later in Stage 5, a Lambda pulls out its text and marks it `processed`, and in Stage 6 the WhatsApp bot answers from it.
+An agent sends a PDF as the multipart form field `file`. The API saves it to the private S3 bucket and records it as `uploaded`. S3 then runs a Lambda function (`lambda/extract_text.py`), which pulls out the text, saves it to S3, and marks the document `processed`. In Stage 6 the WhatsApp bot answers from that text.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.0.0.1:8000/documents
@@ -338,6 +339,22 @@ curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.
 - **Each upload gets its own key** in S3, like `uploads/7020...001c.pdf`, made from a random UUID. Two files named `manual.pdf` never overwrite each other. The key stays out of the response.
 - **S3 first, then the database.** The row is saved only once the file is in S3, so a row never points to a missing file.
 - **A 503 means S3 isn't ready:** `S3_BUCKET` is empty, or S3 refused the upload or couldn't be reached, such as with no AWS credentials. Nothing is saved, and the agent can try again.
+
+### Mark a help doc processed
+
+Only the Lambda calls this, after saving a PDF's text to S3. It sends the shared secret in `X-Webhook-Secret`, and the two keys: the upload's, which finds the document, and where the text is. [infra/aws/README.md](infra/aws/README.md#pulling-the-text-out-of-uploads-lambda) explains the Lambda.
+
+```bash
+curl -H "X-Webhook-Secret: $LAMBDA_WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  -d '{"s3_key": "uploads/7020...001c.pdf", "text_s3_key": "text/7020...001c.txt"}' \
+  http://127.0.0.1:8000/webhooks/document-processed
+```
+
+- **A wrong or missing secret gets a 403,** checked before the body is read, and the check takes as long however much of the secret is right. Until `LAMBDA_WEBHOOK_SECRET` is set, every call gets a 503.
+- **The keys must look like the ones the API and the Lambda make** (`uploads/` or `text/`, 32 hex digits, `.pdf` or `.txt`), or it's a 422.
+- **A 404 means no document has that key.** Usually the PDF reached S3, which started the Lambda, just before `POST /documents` saved the row. The Lambda fails, and Lambda runs it again a minute later.
+- **Calling it twice is harmless.** Lambda retries, and S3 can deliver the same event twice, so marking a processed document again changes nothing.
+- **It isn't rate limited per IP.** Like Twilio's, every call comes from the same cloud's addresses, and the secret is checked first.
 
 ### Status codes
 

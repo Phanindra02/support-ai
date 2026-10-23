@@ -8,12 +8,13 @@ import re
 import ssl
 
 import botocore.session
+import extract_text
 import pytest
 import yaml
 from botocore.validate import ParamValidator
 from sqlalchemy import make_url
 
-from app.config import PROJECT_ROOT
+from app.config import PROJECT_ROOT, Settings
 from app.storage import UPLOAD_PREFIX
 
 AWS = PROJECT_ROOT / "infra" / "aws"
@@ -311,7 +312,8 @@ def test_the_server_can_only_read_the_apps_own_parameters(server_permissions):
 
 def test_every_secret_is_stored_encrypted(readme):
     # A String parameter would be readable by anyone allowed to list parameters.
-    commands = re.findall(r"aws ssm put-parameter[^\n]*(?:\\\n[^\n]*)*", readme)
+    # Each whole command: anything but a line break, or a backslash that continues the line.
+    commands = re.findall(r"aws ssm put-parameter(?:[^\n\\]|\\\n)*", readme)
     assert commands
     for command in commands:
         assert "--type SecureString" in command, command
@@ -330,3 +332,129 @@ def test_the_certificates_are_amazons_roots_for_rds_in_us_east_2():
         "Amazon RDS us-east-2 Root CA RSA4096 G1",
         "Amazon RDS us-east-2 Root CA ECC384 G1",
     }
+
+
+# The Lambda that pulls the text out of uploads (lambda/extract_text.py).
+
+
+@pytest.fixture(scope="module")
+def function():
+    return json.loads((AWS / "lambda-function.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def lambda_permissions():
+    statements = json.loads((AWS / "lambda-permissions.json").read_text())["Statement"]
+    return {statement["Sid"]: statement for statement in statements}
+
+
+@pytest.fixture(scope="module")
+def trigger():
+    notification = json.loads((AWS / "docs-bucket-notification.json").read_text())
+    [trigger] = notification["LambdaFunctionConfigurations"]
+    return trigger
+
+
+def test_the_function_settings_are_ones_lambda_accepts(function):
+    # The role and the zip are given on the command line, so stand-ins fill them here.
+    request = {**function, "Role": "arn:aws:iam::ACCOUNT_ID:role/r", "Code": {"ZipFile": b""}}
+    model = botocore.session.get_session().get_service_model("lambda")
+    report = ParamValidator().validate(request, model.operation_model("CreateFunction").input_shape)
+    assert not report.has_errors(), report.generate_report()
+
+
+def test_the_function_runs_the_projects_python_on_graviton(function):
+    python_version = (PROJECT_ROOT / ".python-version").read_text().strip()
+    assert function["Runtime"] == f"python{python_version}"
+    assert function["Architectures"] == ["arm64"]
+
+
+def test_the_function_starts_at_the_handler(function):
+    module, name = function["Handler"].split(".")
+    assert (PROJECT_ROOT / "lambda" / f"{module}.py").exists()
+    assert callable(getattr(extract_text, name))
+
+
+def test_the_function_calls_the_api_at_caddys_domain(function):
+    [site] = re.findall(r"^(\S+) \{$", (AWS / "Caddyfile").read_text(), re.MULTILINE)
+    assert function["Environment"]["Variables"]["API_URL"] == f"https://{site}"
+
+
+def test_the_function_and_the_api_read_the_same_secret(function):
+    # The API loads everything directly under PARAMETER_STORE_PATH, and the parameter's name
+    # is the setting it fills.
+    parameter = function["Environment"]["Variables"]["SECRET_PARAMETER"]
+    compose = yaml.load((AWS / "compose.ec2.yml").read_text(), Loader=IgnoreTagsLoader)
+    path = compose["services"]["api"]["environment"]["PARAMETER_STORE_PATH"]
+    folder, name = parameter.rsplit("/", 1)
+    assert folder == path
+    assert name.lower() == "lambda_webhook_secret" and name.lower() in Settings.model_fields
+
+
+def test_the_function_has_time_to_wait_for_the_api(function):
+    assert function["Timeout"] > extract_text.API_TIMEOUT_SECONDS
+
+
+def test_only_lambda_can_use_the_functions_role():
+    [statement] = json.loads((AWS / "lambda-trust-policy.json").read_text())["Statement"]
+    assert statement["Principal"] == {"Service": "lambda.amazonaws.com"}
+    assert statement["Action"] == "sts:AssumeRole"
+
+
+def test_the_function_reads_uploads_and_writes_only_text(lambda_permissions):
+    assert set(lambda_permissions) == {
+        "ReadUploadedDocs",
+        "SaveTheirText",
+        "ReadTheWebhookSecret",
+        "WriteLogs",
+    }
+    assert all(statement["Effect"] == "Allow" for statement in lambda_permissions.values())
+    read = lambda_permissions["ReadUploadedDocs"]
+    assert read["Action"] == "s3:GetObject"
+    assert read["Resource"] == f"arn:aws:s3:::{BUCKET}/{UPLOAD_PREFIX}*"
+    # It can add text, but never change or delete an upload.
+    save = lambda_permissions["SaveTheirText"]
+    assert save["Action"] == "s3:PutObject"
+    assert save["Resource"] == f"arn:aws:s3:::{BUCKET}/{extract_text.TEXT_PREFIX}*"
+
+
+def test_the_function_reads_only_its_own_secret(function, lambda_permissions):
+    secret = lambda_permissions["ReadTheWebhookSecret"]
+    assert secret["Action"] == "ssm:GetParameter"
+    parameter = function["Environment"]["Variables"]["SECRET_PARAMETER"]
+    assert secret["Resource"] == f"arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter{parameter}"
+
+
+def test_the_function_writes_only_its_own_logs(function, lambda_permissions, readme):
+    # The log group is made in the README, with a retention period, so the role doesn't need
+    # logs:CreateLogGroup, and the logs don't pile up forever.
+    log_group = f"/aws/lambda/{function['FunctionName']}"
+    logs = lambda_permissions["WriteLogs"]
+    assert set(logs["Action"]) == {"logs:CreateLogStream", "logs:PutLogEvents"}
+    assert logs["Resource"] == f"arn:aws:logs:us-east-2:ACCOUNT_ID:log-group:{log_group}:*"
+    assert f"--log-group-name {log_group} --retention-in-days" in readme
+
+
+def test_only_new_uploads_start_the_function(function, trigger):
+    assert trigger["Events"] == ["s3:ObjectCreated:*"]
+    assert trigger["LambdaFunctionArn"].endswith(f":function:{function['FunctionName']}")
+    rules = {rule["Name"]: rule["Value"] for rule in trigger["Filter"]["Key"]["FilterRules"]}
+    assert rules == {"prefix": UPLOAD_PREFIX, "suffix": ".pdf"}
+
+
+def test_the_functions_own_text_cant_start_it_again(trigger):
+    # The text is saved in the same bucket. If the trigger matched it, the function would run
+    # on its own output, over and over.
+    rules = {rule["Name"]: rule["Value"] for rule in trigger["Filter"]["Key"]["FilterRules"]}
+    text_key = extract_text.text_key_for(UPLOAD_PREFIX + "0" * 32 + ".pdf")
+    assert not (text_key.startswith(rules["prefix"]) and text_key.endswith(rules["suffix"]))
+
+
+def test_only_this_bucket_in_this_account_can_start_the_function(readme):
+    # Without --source-account, a bucket with the same name in another account could, if this
+    # one were ever deleted and its name taken.
+    # The whole command: anything but a line break, or a backslash that continues the line.
+    [command] = re.findall(r"aws lambda add-permission(?:[^\n\\]|\\\n)*", readme)
+    assert "--principal s3.amazonaws.com" in command
+    assert f"--source-arn arn:aws:s3:::{BUCKET}" in command
+    assert '--source-account "$ACCOUNT_ID"' in command

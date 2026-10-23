@@ -39,7 +39,7 @@ class AgentRole(enum.StrEnum):
 class DocumentStatus(enum.StrEnum):
     # The PDF is in S3, and its text hasn't been pulled out yet.
     uploaded = "uploaded"
-    # The Lambda has saved the PDF's text in S3 (later in Stage 5).
+    # The Lambda has saved the PDF's text in S3 (lambda/extract_text.py).
     processed = "processed"
 
 
@@ -156,6 +156,9 @@ class Document(Base):
     # it up, so two files named manual.pdf can't overwrite each other. Unique, so the Lambda
     # can find the row from the key S3 tells it about.
     s3_key: Mapped[str] = mapped_column(String(255), unique=True)
+    # Where the Lambda saved the PDF's text, like text/<the same hex digits>.txt. Empty until
+    # the document is processed. The Stage 6 worker reads the text from here.
+    text_s3_key: Mapped[str | None] = mapped_column(String(255))
     size_bytes: Mapped[int]
     status: Mapped[DocumentStatus] = mapped_column(
         Enum(DocumentStatus, validate_strings=True), default=DocumentStatus.uploaded

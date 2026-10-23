@@ -123,7 +123,7 @@ Every resource in this stage costs money. Give the expected monthly cost and get
 - [x] Run the Alembic migrations on RDS and switch the API over to it. `infra/aws/compose.ec2.yml` points the server at RDS, and its one agent was copied over with `pg_dump`. The API connects with TLS 1.3 and checks the certificate (`sslmode=verify-full`).
 - [x] Store secrets in AWS Systems Manager Parameter Store and load them when the app starts. SecureStrings under `/support-ai`, loaded by a settings source in `app/config.py` on EC2 only. The server's `.env` holds no secrets.
 - [x] **[You]** Buy a cheap domain. Point it at the instance, and put Caddy in front of the API for free automatic HTTPS. The API is at `https://support.mysolospark.com`, a DNS-only Cloudflare record pointing at the Elastic IP. Caddy runs on the server's own network and reaches the API at `127.0.0.1:8000`, so the API's trust in forwarded headers didn't change.
-- [ ] **[You]** Update the Twilio webhook to the new URL.
+- [x] **[You]** Update the Twilio webhook to the new URL. The sandbox calls `https://support.mysolospark.com/webhooks/twilio`. The first message made ticket 1 on RDS, and its signature passed, so behind Caddy the API rebuilds the `https://` URL that Twilio signed.
 - [ ] Write a Lambda function that runs on every S3 upload and extracts the PDF's text with pypdf.
 - [ ] Have the Lambda save the text as a file in S3, then call the API (with a shared secret) to mark the doc "processed."
 - [ ] Extend CI so merges to main push to ECR, then SSH into EC2 to pull and restart the new image. **[You]** Add the deploy secrets in the GitHub repo settings.
