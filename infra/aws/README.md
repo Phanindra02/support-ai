@@ -99,7 +99,7 @@ aws iam get-role --role-name support-ai-ci-push-image --query Role.AssumeRolePol
 
 ## The server (EC2)
 
-One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of memory, running Ubuntu 24.04. It's ARM like the Mac and like CI's runner, so the image CI builds runs on it as is. It runs the same `docker compose` stack as the Mac.
+One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of memory, running Ubuntu 24.04. It's ARM like the Mac and like CI's runner, so the image CI builds runs on it as is. It runs the same `docker compose` stack as the Mac, except that its database is RDS ([below](#the-database-rds)).
 
 - **IAM role `support-ai-server`** gives the server's programs AWS credentials, through the instance metadata service, so no AWS keys are stored on it. `ec2-permissions.json` allows only what the app does: save uploads under `uploads/` in the docs bucket, pull the API image from ECR, and read the database's URL from Parameter Store. A role reaches an instance through an instance profile of the same name.
 - **IMDSv2 only, with a hop limit of 2.** IMDSv2 needs a token from a PUT request first, which blocks the classic attack where a server is tricked into fetching the metadata URL and leaking its credentials. The hop limit of 2 lets a container reach the metadata service: compose's network adds one hop, and at the default of 1 the API couldn't get the role's credentials.
@@ -219,24 +219,27 @@ Once the database below exists, the server uses it instead of its Postgres conta
 
 The URL comes from Parameter Store, read with the instance role from inside the API's image, which has boto3. It goes into `.env` without being shown, and moves out of `.env` when the app loads its secrets from Parameter Store itself, later in Stage 5.
 
+`docker compose run` reads whatever input follows it, so when these lines are pasted, or piped in with `ssh server bash -s`, it swallows the lines after it and they never run. `</dev/null` gives it nothing to read.
+
 ```bash
 # On the server:
 cd ~/support-ai && git pull && docker compose pull
 
-DATABASE_URL=$(docker compose run --rm --no-deps -T api python -c "import boto3; print(boto3.client('ssm', region_name='us-east-2').get_parameter(Name='/support-ai/DATABASE_URL', WithDecryption=True)['Parameter']['Value'])")
+DATABASE_URL=$(docker compose run --rm --no-deps -T api python -c "import boto3; print(boto3.client('ssm', region_name='us-east-2').get_parameter(Name='/support-ai/DATABASE_URL', WithDecryption=True)['Parameter']['Value'])" </dev/null)
 sed -i "s|^DATABASE_URL=.*|DATABASE_URL=${DATABASE_URL}|" .env
 echo "COMPOSE_FILE=docker-compose.yml:infra/aws/compose.ec2.yml" >> .env
 
 # Stop the API, so nothing changes during the copy. Then make the tables on RDS.
 docker compose stop api
-docker compose run --rm migrate
+docker compose run --rm migrate </dev/null
 
 # Copy the rows from the container to RDS. Only the rows: the migrations made the tables.
-# psql wants the same URL without SQLAlchemy's "+psycopg".
+# psql wants the same URL without SQLAlchemy's "+psycopg". --single-transaction copies all of
+# it or, if anything fails, none of it.
 docker exec support-ai-postgres-1 pg_dump -U support -d support --data-only \
     --exclude-table=alembic_version \
   | docker run --rm -i -v "$PWD/infra/aws/rds-ca-us-east-2.pem:/rds.pem:ro" -e PGSSLROOTCERT=/rds.pem \
-    postgres:16 psql -v ON_ERROR_STOP=1 --quiet "${DATABASE_URL/+psycopg/}"
+    postgres:16 psql -v ON_ERROR_STOP=1 --quiet --single-transaction "${DATABASE_URL/+psycopg/}"
 unset DATABASE_URL
 
 docker compose up -d --no-build
@@ -245,10 +248,10 @@ docker stop support-ai-postgres-1
 
 The old container and its volume are kept, as a way back. To go back, delete the `COMPOSE_FILE` line from `.env` and run `docker compose up -d --no-build`, which brings back the data as it was at the move. Once RDS has run for a while without trouble, `docker rm support-ai-postgres-1` and `docker volume rm support-ai_postgres-data` remove them.
 
-To check that the API's connection to RDS is encrypted:
+To check that the API's connection to RDS is encrypted. It printed `(True, 'TLSv1.3')` after the move:
 
 ```bash
-docker compose exec -T api python -c "from sqlalchemy import text; from app.database import engine; print(engine.connect().execute(text('select ssl, version from pg_stat_ssl where pid = pg_backend_pid()')).one())"
+docker compose exec -T api python -c "from sqlalchemy import text; from app.database import engine; print(engine.connect().execute(text('select ssl, version from pg_stat_ssl where pid = pg_backend_pid()')).one())" </dev/null
 ```
 
 ## The database (RDS)

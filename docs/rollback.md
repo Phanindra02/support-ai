@@ -24,6 +24,14 @@ git diff --name-only <good-commit> <bad-commit> -- alembic/versions
   docker compose run --rm migrate alembic downgrade -1    # one migration back
   ```
 
+  On the EC2 server, the database is RDS, with no Postgres container. Take an RDS snapshot instead, and wait for it before the downgrade. It's free while all backups together stay under 20 GB:
+
+  ```bash
+  aws rds create-db-snapshot --region us-east-2 --db-instance-identifier support-ai \
+    --db-snapshot-identifier before-downgrade-$(date +%Y%m%d-%H%M)
+  aws rds wait db-snapshot-available --region us-east-2 --db-instance-identifier support-ai
+  ```
+
 Order matters. If the code goes back first, its `migrate` container finds the database at a revision it has never heard of. `alembic upgrade head` then fails with "Can't locate revision", and the API never starts, because it waits for `migrate` to succeed.
 
 ## 2. Roll back the code
