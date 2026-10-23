@@ -212,3 +212,87 @@ To run a newer image, until CI does it after each merge:
 ```bash
 cd ~/support-ai && git pull && docker compose pull && docker compose up -d --no-build
 ```
+
+## The database (RDS)
+
+One RDS PostgreSQL instance named `support-ai`, which replaces the Postgres container on the server. AWS runs Postgres for us: it installs minor-version fixes, backs the database up every night, and can restore it to any moment of the last 7 days, up to about 5 minutes ago. `rds-instance.json` holds every setting:
+
+- **`db.t4g.micro`**, the smallest instance RDS has: 2 Graviton vCPUs (a burstable share of them) and 1 GB of memory. Plenty for this project's traffic, and the class can be changed later with a few minutes of downtime.
+- **PostgreSQL 16**, the same major version as Homebrew's on the Mac, compose's `postgres:16`, and CI's, so the migrations run the same everywhere. `16.15` was the newest 16 that RDS offered, and `AutoMinorVersionUpgrade` installs later 16.x fixes in the Sunday maintenance window. **Extended Support is turned off**, so when 16 reaches the end of standard support (February 2029), AWS warns and then upgrades it, instead of quietly adding a per-hour Extended Support charge.
+- **One copy in one availability zone (`MultiAZ: false`).** Multi-AZ keeps a standby copy in a second zone and switches to it within a couple of minutes if the first fails, but it doubles the cost. Without it the database is a single point of failure, recovered from backups. It's in `us-east-2c`, the server's zone, so their traffic doesn't cross zones, which adds latency and is billed per GB.
+- **No public address (`PubliclyAccessible: false`).** Its name resolves to a private address (172.31.x.x), which only works inside the VPC, so nothing on the internet can even try to connect.
+- **Security group `support-ai-db`** lets in Postgres's port 5432 only from the `support-ai-server` security group, which means only from the EC2 instance. The rule names the server's group rather than its IP address, so it keeps working if the server is replaced. The database never starts connections itself, so its group has no outbound rule.
+- **Subnet group `support-ai`** names the subnets RDS may put the database in. RDS wants at least two zones, so it gets the default VPC's three. They are public subnets, which have a route to the internet, but with no public address and that security group, the database can't be reached through it. Private subnets would be one more layer; the default VPC has none, and making them is a step this project skips.
+- **20 GB of encrypted gp3 storage**, the smallest gp3 size. Encryption uses the AWS-managed key, which costs nothing. Storage autoscaling stays off, so the bill can't grow by itself.
+- **Backups are kept 7 days**, and taken from 08:00 to 08:30 UTC, early morning in Ohio. Maintenance runs on Sundays right after. **Deletion protection** is on, so the instance can't be deleted until it's turned off.
+- **Performance Insights and Enhanced Monitoring are off.** The free CloudWatch metrics (CPU, connections, free storage) are enough here.
+
+RDS for PostgreSQL 16 only accepts encrypted connections (`rds.force_ssl` is on by default). The API's URL asks for `sslmode=verify-full`, which also checks the database's certificate against Amazon's RDS certificate bundle, so it can't be tricked into talking to an impostor. The API's image gets that bundle when the API moves to RDS.
+
+### The password
+
+The database's password is made in the same commands that create it, and goes straight into Parameter Store as `/support-ai/DATABASE_URL`, the whole URL the API needs. It's a SecureString, encrypted with the AWS-managed `aws/ssm` key, and it's never printed or saved on the Mac. Standard parameters cost nothing. Later in Stage 5, the app loads this and every other secret from Parameter Store when it starts.
+
+RDS can instead keep the password in Secrets Manager (`--manage-master-user-password`), which changes it every 7 days. That would break the URL stored here each week, and costs $0.40 a month per secret, so this project keeps one place for secrets: Parameter Store.
+
+The API logs in as the master user, `support`. It isn't a true Postgres superuser on RDS, but it can do anything in the `support` database. A separate app user with fewer rights would be safer, and is one more password to manage.
+
+Cost: the instance $11.68 (at $0.016 an hour), the storage $2.30, about $14 a month. Backups up to the database's size, 20 GB, are free. RDS always runs t4g instances in unlimited mode: if the CPU stayed busy above its baseline for hours, the extra would be billed at $0.075 per vCPU-hour, which this project's traffic won't come near.
+
+### Create it
+
+```bash
+SERVER_SG_ID=$(aws ec2 describe-security-groups --region us-east-2 \
+  --group-names support-ai-server --query 'SecurityGroups[0].GroupId' --output text)
+DB_SG_ID=$(aws ec2 create-security-group --region us-east-2 --group-name support-ai-db \
+  --description "support-ai RDS database" --query GroupId --output text)
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id "$DB_SG_ID" \
+  --protocol tcp --port 5432 --source-group "$SERVER_SG_ID"
+# New groups allow every outbound connection. The database never makes one.
+aws ec2 revoke-security-group-egress --region us-east-2 --group-id "$DB_SG_ID" \
+  --ip-permissions 'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]'
+
+# The default VPC's subnets. The $(...) is left unquoted so it splits into one ID per argument.
+aws rds create-db-subnet-group --region us-east-2 --db-subnet-group-name support-ai \
+  --db-subnet-group-description "support-ai: the default VPC's subnets" \
+  --subnet-ids $(aws ec2 describe-subnets --region us-east-2 \
+    --filters Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text)
+
+# Letters and digits only, because it goes into a URL. Takes about 10 minutes.
+DB_PASSWORD=$(openssl rand -hex 24)
+aws rds create-db-instance --region us-east-2 --cli-input-json file://infra/aws/rds-instance.json \
+  --vpc-security-group-ids "$DB_SG_ID" --master-user-password "$DB_PASSWORD"
+aws rds wait db-instance-available --region us-east-2 --db-instance-identifier support-ai
+
+DB_HOST=$(aws rds describe-db-instances --region us-east-2 --db-instance-identifier support-ai \
+  --query 'DBInstances[0].Endpoint.Address' --output text)
+aws ssm put-parameter --region us-east-2 --name /support-ai/DATABASE_URL --type SecureString \
+  --value "postgresql+psycopg://support:${DB_PASSWORD}@${DB_HOST}:5432/support?sslmode=verify-full"
+unset DB_PASSWORD
+```
+
+Settings given on the command line are added to the ones in the JSON file, which is why the password and the security group (whose ID differs each time it's made) aren't in it.
+
+If the terminal closes before `put-parameter`, the password is lost, but nothing is broken. Set a new one, then store the URL with `--overwrite`:
+
+```bash
+DB_PASSWORD=$(openssl rand -hex 24)
+aws rds modify-db-instance --region us-east-2 --db-instance-identifier support-ai \
+  --master-user-password "$DB_PASSWORD" --apply-immediately
+```
+
+### Check it
+
+```bash
+aws rds describe-db-instances --region us-east-2 --db-instance-identifier support-ai \
+  --query 'DBInstances[0].[DBInstanceStatus,EngineVersion,AvailabilityZone,PubliclyAccessible,StorageEncrypted]'
+aws ssm describe-parameters --region us-east-2 \
+  --parameter-filters Key=Name,Values=/support-ai/DATABASE_URL --query 'Parameters[0].Type'
+
+DB_HOST=$(aws rds describe-db-instances --region us-east-2 --db-instance-identifier support-ai \
+  --query 'DBInstances[0].Endpoint.Address' --output text)
+# From the server, Postgres answers. pg_isready needs no password.
+ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP" docker run --rm postgres:16 pg_isready -h "$DB_HOST"
+# From the Mac, the name resolves to a private address the Mac can't reach, so this times out.
+nc -z -G 5 "$DB_HOST" 5432
+```

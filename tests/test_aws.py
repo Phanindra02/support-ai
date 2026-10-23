@@ -6,7 +6,11 @@ These tests read the files the README applies with the AWS CLI. They never call 
 import json
 import re
 
+import botocore.session
 import pytest
+import yaml
+from botocore.validate import ParamValidator
+from sqlalchemy import make_url
 
 from app.config import PROJECT_ROOT
 from app.storage import UPLOAD_PREFIX
@@ -179,3 +183,88 @@ def test_first_boot_restarts_docker_after_installing_it():
     script = (AWS / "ec2-user-data.sh").read_text()
     install = script.index("apt-get install -y docker-ce")
     assert script.index("systemctl restart docker.socket docker.service") > install
+
+
+# The database (RDS).
+
+
+@pytest.fixture(scope="module")
+def database():
+    return json.loads((AWS / "rds-instance.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def readme():
+    return (AWS / "README.md").read_text()
+
+
+def test_the_database_settings_are_ones_rds_accepts(database):
+    # botocore holds the same description of the RDS API that the AWS CLI checks input against,
+    # so a misspelled setting fails here instead of when the database is created.
+    rds = botocore.session.get_session().get_service_model("rds")
+    report = ParamValidator().validate(
+        database, rds.operation_model("CreateDBInstance").input_shape
+    )
+    assert not report.has_errors(), report.generate_report()
+
+
+def test_the_database_is_the_smallest_graviton_instance_in_one_zone(database):
+    assert database["DBInstanceClass"] == "db.t4g.micro"
+    assert database["MultiAZ"] is False
+    assert database["AvailabilityZone"].startswith("us-east-2")
+    # 20 GB is the smallest gp3 size. Without MaxAllocatedStorage, storage never grows by itself.
+    assert (database["StorageType"], database["AllocatedStorage"]) == ("gp3", 20)
+    assert "MaxAllocatedStorage" not in database
+
+
+def test_the_database_runs_the_same_postgres_as_compose_and_ci(database):
+    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
+    ci = yaml.safe_load((PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    assert database["Engine"] == "postgres"
+    major = database["EngineVersion"].split(".")[0]
+    assert compose["services"]["postgres"]["image"] == f"postgres:{major}"
+    assert ci["jobs"]["test"]["services"]["postgres"]["image"] == f"postgres:{major}"
+
+
+def test_the_database_has_no_public_address(database):
+    assert database["PubliclyAccessible"] is False
+
+
+def test_only_the_servers_security_group_can_reach_the_database(readme):
+    # Allowed by security group, not by IP address, and never from a CIDR range like 0.0.0.0/0.
+    [rule] = re.findall(
+        r"authorize-security-group-ingress[^\n]*\\\n[^\n]*--port 5432[^\n]*", readme
+    )
+    assert rule.endswith('--source-group "$SERVER_SG_ID"')
+    assert "--cidr" not in rule
+    assert '--vpc-security-group-ids "$DB_SG_ID"' in readme
+
+
+def test_the_database_is_encrypted_backed_up_and_hard_to_delete(database):
+    assert database["StorageEncrypted"] is True
+    assert database["BackupRetentionPeriod"] >= 7
+    assert database["DeletionProtection"] is True
+    assert database["CopyTagsToSnapshot"] is True
+
+
+def test_the_database_never_moves_to_paid_extended_support(database):
+    assert database["EngineLifecycleSupport"] == "open-source-rds-extended-support-disabled"
+
+
+def test_no_database_password_is_written_in_the_file(database):
+    # The README makes one when it creates the database. A managed password would rotate weekly
+    # and break the URL stored in Parameter Store.
+    assert "MasterUserPassword" not in database
+    assert "ManageMasterUserPassword" not in database
+
+
+def test_the_database_url_is_stored_encrypted_and_checks_the_certificate(database, readme):
+    [command] = re.findall(r"aws ssm put-parameter[^\n]*\\\n[^\n]*", readme)
+    assert "--name /support-ai/DATABASE_URL --type SecureString" in command
+    [url] = re.findall(r'--value "([^"]+)"', command)
+    url = make_url(url)
+    assert url.drivername == "postgresql+psycopg"
+    assert url.username == database["MasterUsername"]
+    assert url.database == database["DBName"]
+    # verify-full checks that the certificate is Amazon's and names this database's host.
+    assert url.query == {"sslmode": "verify-full"}
