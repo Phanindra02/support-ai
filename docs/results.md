@@ -131,3 +131,18 @@ The dependencies sit in their own layer, built before any code is copied in. A c
 The second run only changed `docs/ROADMAP.md`, which isn't in the build context, so every build step was `CACHED`. Even so, it saved just 2 s. On GitHub's runners, uv installs all 68 packages in under 5 seconds, so there's little for the cache to save. Most of the build is moving layers instead: loading the image into Docker for the smoke test, and saving every layer back to the cache (`cache-to: mode=max`) on each run. On the Mac the cache matters far more (0.6 s against 8 to 15 s, above), because Docker keeps the layers on the same disk.
 
 A whole run takes about 2 minutes, and `test` then `image` are the critical path. Saving only the final layers (`mode=min`) or dropping the Actions cache could save 10 to 15 s a run. That hasn't been tried.
+
+## PDF text Lambda (Stage 5)
+
+**Setup.** One real upload through `POST /documents` on the EC2 server: a 40 KB, text-based PDF. The times come from the S3 objects' `LastModified`, the API's access log, and the Lambda's `REPORT` line in CloudWatch Logs (`aws logs tail /aws/lambda/support-ai-extract-text`). The function has 512 MB on `arm64`, Python 3.14. It was the function's first run, so Lambda had to start a new container (a cold start).
+
+| | |
+| --- | ---: |
+| Upload in S3 to text saved in S3 | 2 s |
+| Text pulled out | 2,167 characters |
+| Container start (`Init Duration`) | 655 ms |
+| The run itself (`Duration`) | 902 ms |
+| Billed | 1,557 ms |
+| Memory used | 121 of 512 MB |
+
+Lambda now bills the container's start too, so a cold run is billed for both: 1,557 ms at 0.5 GB is 0.78 GB-seconds, about $0.00001 past the free allowance of 400,000 GB-seconds a month. A run that finds a warm container skips the 655 ms. The function used under a quarter of its memory, so 256 MB would likely do, but Lambda gives CPU in proportion to memory, so pypdf would run slower. Only one PDF was measured, so these are a first look, not a benchmark.
