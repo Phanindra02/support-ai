@@ -126,7 +126,7 @@ Every resource in this stage costs money. Give the expected monthly cost and get
 - [x] **[You]** Update the Twilio webhook to the new URL. The sandbox calls `https://support.mysolospark.com/webhooks/twilio`. The first message made ticket 1 on RDS, and its signature passed, so behind Caddy the API rebuilds the `https://` URL that Twilio signed.
 - [x] Write a Lambda function that runs on every S3 upload and extracts the PDF's text with pypdf. `support-ai-extract-text` (`lambda/extract_text.py`), on Python 3.14 and Graviton, runs for each new `uploads/*.pdf`.
 - [x] Have the Lambda save the text as a file in S3, then call the API (with a shared secret) to mark the doc "processed." The text goes to `text/<id>.txt`, and `POST /webhooks/document-processed` checks the secret from Parameter Store. Built with step 13, which has nothing to show until the text is saved. The first real upload was processed within 2 seconds.
-- [ ] Extend CI so merges to main push to ECR, then SSH into EC2 to pull and restart the new image. **[You]** Add the deploy secrets in the GitHub repo settings.
+- [x] Extend CI so merges to main push to ECR, then SSH into EC2 to pull and restart the new image. **[You]** Add the deploy secrets in the GitHub repo settings. Through AWS Systems Manager instead of SSH, the developer's choice: no port opened and no key in GitHub, so there were no deploy secrets to add, just the repo variable `SERVER_INSTANCE_ID`. The first deploy (run 40034718281) put `sha-9d9b9af` on the server.
 
 Why Graviton: it runs on ARM like the Mac, so images built locally run on it as-is, and it usually costs less than a standard instance.
 
