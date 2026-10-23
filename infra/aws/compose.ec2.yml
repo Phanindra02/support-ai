@@ -1,5 +1,5 @@
-# The EC2 server's changes to docker-compose.yml: the database is RDS, not a container, and
-# the secrets come from Parameter Store.
+# The EC2 server's changes to docker-compose.yml: the database is RDS, not a container, the
+# secrets come from Parameter Store, and Caddy serves the API over HTTPS.
 #
 # The server's .env turns this file on with the line below, so a plain `docker compose up`
 # there reads both files, and this one's keys replace the same keys in docker-compose.yml:
@@ -26,3 +26,26 @@ services:
   # leaves Postgres out on the server.
   postgres:
     profiles: [local-postgres]
+
+  # Answers on ports 80 and 443 for the domain, with a certificate it gets and renews by
+  # itself, and passes each request on to the API (infra/aws/Caddyfile).
+  caddy:
+    # The same major version for good: the tag gets bug and security fixes (2.x) on each pull.
+    image: caddy:2
+    # The server's own network, so Caddy listens on its ports 80 and 443 directly, and reaches
+    # the API at 127.0.0.1:8000. Those connections arrive from the compose network's gateway,
+    # the one address the API trusts forwarded headers from (FORWARDED_ALLOW_IPS). On compose's
+    # network, Caddy would get whatever address Docker handed out, which the API can't name.
+    network_mode: host
+    volumes:
+      # Paths here are relative to the project root, where docker-compose.yml is.
+      - ./infra/aws/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The certificates and the Let's Encrypt account. Kept, so a new container doesn't ask
+      # for new certificates: Let's Encrypt allows 5 a week for the same name.
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

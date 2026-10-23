@@ -1,0 +1,10 @@
+# Caddy, in front of the API on the EC2 server (infra/aws/README.md). For the domain below, it
+# gets a free certificate from Let's Encrypt, renews it before it expires, and redirects plain
+# HTTP to HTTPS. Naming a domain, rather than just a port, is what turns all of that on.
+
+support.mysolospark.com {
+	# The API's port on the server's own 127.0.0.1, the way ngrok reached it on the Mac. Caddy
+	# passes the Host header on as it came, and sets X-Forwarded-For and X-Forwarded-Proto to
+	# the client's real address and "https", replacing whatever the client sent in them.
+	reverse_proxy 127.0.0.1:8000
+}
