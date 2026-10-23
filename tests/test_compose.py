@@ -14,6 +14,17 @@ from sqlalchemy import make_url
 from app.config import PROJECT_ROOT, Settings
 
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
+EC2_COMPOSE_FILE = PROJECT_ROOT / "infra" / "aws" / "compose.ec2.yml"
+
+# What compose's !reset tag reads as here. Plain YAML doesn't know the tag.
+RESET = "!reset"
+
+
+class ComposeLoader(yaml.SafeLoader):
+    """safe_load, plus the !reset tag compose uses to drop a value from an earlier file."""
+
+
+ComposeLoader.add_constructor(RESET, lambda loader, node: RESET)
 
 
 @pytest.fixture(scope="module")
@@ -101,3 +112,35 @@ def test_no_secret_is_written_in_the_file(services, api_environment):
     secret_settings = {"JWT_SECRET_KEY", "TWILIO_AUTH_TOKEN", "N8N_WEBHOOK_SECRET"}
     assert not secret_settings & api_environment.keys()
     assert services["api"]["env_file"] == ".env"
+
+
+# The EC2 server's changes, in infra/aws/compose.ec2.yml.
+
+
+@pytest.fixture(scope="module")
+def ec2_services():
+    return yaml.load(EC2_COMPOSE_FILE.read_text(), Loader=ComposeLoader)["services"]
+
+
+def test_on_ec2_only_the_database_changes(ec2_services):
+    assert set(ec2_services) == {"api", "migrate", "postgres"}
+
+
+def test_on_ec2_the_api_and_its_migrations_use_the_rds_url_from_env(ec2_services):
+    # Required (:?), so a server without the URL stops instead of starting without a database.
+    for name in ["api", "migrate"]:
+        assert ec2_services[name]["environment"]["DATABASE_URL"].startswith("${DATABASE_URL:?")
+
+
+def test_on_ec2_the_postgres_container_never_starts(ec2_services):
+    assert ec2_services["postgres"]["profiles"]
+    # The migrations would otherwise wait for a container that never starts.
+    assert ec2_services["migrate"]["depends_on"] == RESET
+
+
+def test_the_servers_env_turns_the_ec2_file_on():
+    line = "COMPOSE_FILE=docker-compose.yml:infra/aws/compose.ec2.yml"
+    assert line in (PROJECT_ROOT / "infra" / "aws" / "README.md").read_text()
+    assert f"# {line}" in (PROJECT_ROOT / ".env.example").read_text()
+    for path in line.split("=", 1)[1].split(":"):
+        assert (PROJECT_ROOT / path).exists()

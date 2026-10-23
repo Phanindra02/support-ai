@@ -22,6 +22,12 @@
         "ecr:GetDownloadUrlForLayer"
       ],
       "Resource": "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+    },
+    {
+      "Sid": "ReadTheDatabaseUrl",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter/support-ai/DATABASE_URL"
     }
   ]
 }

@@ -101,7 +101,7 @@ aws iam get-role --role-name support-ai-ci-push-image --query Role.AssumeRolePol
 
 One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of memory, running Ubuntu 24.04. It's ARM like the Mac and like CI's runner, so the image CI builds runs on it as is. It runs the same `docker compose` stack as the Mac.
 
-- **IAM role `support-ai-server`** gives the server's programs AWS credentials, through the instance metadata service, so no AWS keys are stored on it. `ec2-permissions.json` allows only what the app does: save uploads under `uploads/` in the docs bucket, and pull the API image from ECR. A role reaches an instance through an instance profile of the same name.
+- **IAM role `support-ai-server`** gives the server's programs AWS credentials, through the instance metadata service, so no AWS keys are stored on it. `ec2-permissions.json` allows only what the app does: save uploads under `uploads/` in the docs bucket, pull the API image from ECR, and read the database's URL from Parameter Store. A role reaches an instance through an instance profile of the same name.
 - **IMDSv2 only, with a hop limit of 2.** IMDSv2 needs a token from a PUT request first, which blocks the classic attack where a server is tricked into fetching the metadata URL and leaking its credentials. The hop limit of 2 lets a container reach the metadata service: compose's network adds one hop, and at the default of 1 the API couldn't get the role's credentials.
 - **`ec2-user-data.sh`** runs once at first boot. It installs Docker with the compose plugin, sets up ECR logins through the instance role, and adds 2 GB of swap.
 - **Security group `support-ai-server`** is the firewall. It lets in SSH (port 22) only from the Mac's public IP. The API and n8n listen only on the server's 127.0.0.1, as on the Mac, and nothing else is let in until Caddy serves HTTPS on 80 and 443.
@@ -213,6 +213,44 @@ To run a newer image, until CI does it after each merge:
 cd ~/support-ai && git pull && docker compose pull && docker compose up -d --no-build
 ```
 
+### Move it to RDS
+
+Once the database below exists, the server uses it instead of its Postgres container. `compose.ec2.yml` holds the server's changes to `docker-compose.yml`: the API and the migrations take `DATABASE_URL` from `.env`, and the Postgres container no longer starts. One line in the server's `.env`, `COMPOSE_FILE`, makes every `docker compose` command there read both files.
+
+The URL comes from Parameter Store, read with the instance role from inside the API's image, which has boto3. It goes into `.env` without being shown, and moves out of `.env` when the app loads its secrets from Parameter Store itself, later in Stage 5.
+
+```bash
+# On the server:
+cd ~/support-ai && git pull && docker compose pull
+
+DATABASE_URL=$(docker compose run --rm --no-deps -T api python -c "import boto3; print(boto3.client('ssm', region_name='us-east-2').get_parameter(Name='/support-ai/DATABASE_URL', WithDecryption=True)['Parameter']['Value'])")
+sed -i "s|^DATABASE_URL=.*|DATABASE_URL=${DATABASE_URL}|" .env
+echo "COMPOSE_FILE=docker-compose.yml:infra/aws/compose.ec2.yml" >> .env
+
+# Stop the API, so nothing changes during the copy. Then make the tables on RDS.
+docker compose stop api
+docker compose run --rm migrate
+
+# Copy the rows from the container to RDS. Only the rows: the migrations made the tables.
+# psql wants the same URL without SQLAlchemy's "+psycopg".
+docker exec support-ai-postgres-1 pg_dump -U support -d support --data-only \
+    --exclude-table=alembic_version \
+  | docker run --rm -i -v "$PWD/infra/aws/rds-ca-us-east-2.pem:/rds.pem:ro" -e PGSSLROOTCERT=/rds.pem \
+    postgres:16 psql -v ON_ERROR_STOP=1 --quiet "${DATABASE_URL/+psycopg/}"
+unset DATABASE_URL
+
+docker compose up -d --no-build
+docker stop support-ai-postgres-1
+```
+
+The old container and its volume are kept, as a way back. To go back, delete the `COMPOSE_FILE` line from `.env` and run `docker compose up -d --no-build`, which brings back the data as it was at the move. Once RDS has run for a while without trouble, `docker rm support-ai-postgres-1` and `docker volume rm support-ai_postgres-data` remove them.
+
+To check that the API's connection to RDS is encrypted:
+
+```bash
+docker compose exec -T api python -c "from sqlalchemy import text; from app.database import engine; print(engine.connect().execute(text('select ssl, version from pg_stat_ssl where pid = pg_backend_pid()')).one())"
+```
+
 ## The database (RDS)
 
 One RDS PostgreSQL instance named `support-ai`, which replaces the Postgres container on the server. AWS runs Postgres for us: it installs minor-version fixes, backs the database up every night, and can restore it to any moment of the last 7 days, up to about 5 minutes ago. `rds-instance.json` holds every setting:
@@ -227,7 +265,7 @@ One RDS PostgreSQL instance named `support-ai`, which replaces the Postgres cont
 - **Backups are kept 7 days**, and taken from 08:00 to 08:30 UTC, early morning in Ohio. Maintenance runs on Sundays right after. **Deletion protection** is on, so the instance can't be deleted until it's turned off.
 - **Performance Insights and Enhanced Monitoring are off.** The free CloudWatch metrics (CPU, connections, free storage) are enough here.
 
-RDS for PostgreSQL 16 only accepts encrypted connections (`rds.force_ssl` is on by default). The API's URL asks for `sslmode=verify-full`, which also checks the database's certificate against Amazon's RDS certificate bundle, so it can't be tricked into talking to an impostor. The API's image gets that bundle when the API moves to RDS.
+RDS for PostgreSQL 16 only accepts encrypted connections (`rds.force_ssl` is on by default). The API's URL asks for `sslmode=verify-full`, which also checks the database's certificate against Amazon's RDS certificate bundle, so it can't be tricked into talking to an impostor. `rds-ca-us-east-2.pem` is that bundle, Amazon's root certificates for RDS in `us-east-2`, and the API's image includes it. It came from `https://truststore.pki.rds.amazonaws.com/us-east-2/us-east-2-bundle.pem`, and the SHA-1 fingerprints of its three certificates match what `aws rds describe-certificates` reports. They're valid until 2061 and later.
 
 ### The password
 
@@ -273,6 +311,14 @@ unset DB_PASSWORD
 
 Settings given on the command line are added to the ones in the JSON file, which is why the password and the security group (whose ID differs each time it's made) aren't in it.
 
+The server reads the URL with its role, which the updated `ec2-permissions.json` allows. It names that one parameter and only `ssm:GetParameter`, so the server can't list, change, or read any other. Decrypting needs no extra permission, because the `aws/ssm` key lets anyone in the account use it through Parameter Store. To apply the change to the existing role:
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
+```
+
 If the terminal closes before `put-parameter`, the password is lost, but nothing is broken. Set a new one, then store the URL with `--overwrite`:
 
 ```bash
@@ -295,4 +341,11 @@ DB_HOST=$(aws rds describe-db-instances --region us-east-2 --db-instance-identif
 ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP" docker run --rm postgres:16 pg_isready -h "$DB_HOST"
 # From the Mac, the name resolves to a private address the Mac can't reach, so this times out.
 nc -z -G 5 "$DB_HOST" 5432
+```
+
+To check the certificate without the password, on the server, from `~/support-ai`. With the bundle, psql gets through the TLS check and stops at "no password supplied". With only the public CAs (`sslrootcert=system`), it fails with "certificate verify failed", and by IP address instead of the name, with "does not match host name". Without TLS (`sslmode=disable`), RDS refuses it: "no encryption".
+
+```bash
+docker run --rm -v "$PWD/infra/aws/rds-ca-us-east-2.pem:/rds.pem:ro" postgres:16 \
+  psql -w "host=$DB_HOST user=support dbname=support sslmode=verify-full sslrootcert=/rds.pem"
 ```

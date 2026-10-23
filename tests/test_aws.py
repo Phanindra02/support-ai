@@ -5,6 +5,7 @@ These tests read the files the README applies with the AWS CLI. They never call 
 
 import json
 import re
+import ssl
 
 import botocore.session
 import pytest
@@ -155,7 +156,12 @@ def test_the_server_can_only_add_uploads_to_the_bucket(server_permissions):
 
 
 def test_the_server_can_pull_the_api_image_but_never_push(server_permissions):
-    assert set(server_permissions) == {"SaveUploadedDocs", "LogInToEcr", "PullTheApiImage"}
+    assert set(server_permissions) == {
+        "SaveUploadedDocs",
+        "LogInToEcr",
+        "PullTheApiImage",
+        "ReadTheDatabaseUrl",
+    }
     pull = server_permissions["PullTheApiImage"]
     assert set(pull["Action"]) == {
         "ecr:BatchCheckLayerAvailability",
@@ -268,3 +274,27 @@ def test_the_database_url_is_stored_encrypted_and_checks_the_certificate(databas
     assert url.database == database["DBName"]
     # verify-full checks that the certificate is Amazon's and names this database's host.
     assert url.query == {"sslmode": "verify-full"}
+
+
+def test_the_server_can_only_read_the_database_url(server_permissions, readme):
+    # Not GetParametersByPath or PutParameter: one parameter, read only.
+    read = server_permissions["ReadTheDatabaseUrl"]
+    assert read["Action"] == "ssm:GetParameter"
+    assert read["Resource"] == "arn:aws:ssm:us-east-2:ACCOUNT_ID:parameter/support-ai/DATABASE_URL"
+    # The same name the README stores the URL under and the server reads it from.
+    assert readme.count("/support-ai/DATABASE_URL") >= 3
+
+
+def test_the_certificates_are_amazons_roots_for_rds_in_us_east_2():
+    # The ssl module reads the file the same way the database driver will, so a broken or
+    # wrong file fails here.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(AWS / "rds-ca-us-east-2.pem")
+    names = {
+        dict(field[0] for field in cert["subject"])["commonName"] for cert in context.get_ca_certs()
+    }
+    assert names == {
+        "Amazon RDS us-east-2 Root CA RSA2048 G1",
+        "Amazon RDS us-east-2 Root CA RSA4096 G1",
+        "Amazon RDS us-east-2 Root CA ECC384 G1",
+    }
