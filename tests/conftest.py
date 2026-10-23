@@ -1,10 +1,13 @@
 """Shared test fixtures. Tests run on the Postgres database named in TEST_DATABASE_URL."""
 
+import boto3
 import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
+from botocore.config import Config as BotoConfig
 from fastapi.testclient import TestClient
+from moto import mock_aws
 from redis import Redis
 from sqlalchemy import make_url, text
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +19,7 @@ from app.database import Base, get_db, make_engine
 from app.main import app
 from app.models import Agent, AgentRole
 from app.security import create_access_token, hash_password
+from app.storage import get_s3_client
 
 
 def run_alembic(engine, step, revision):
@@ -134,9 +138,31 @@ def n8n():
     return FakeN8n()
 
 
+def unreachable_s3():
+    """An S3 client with made-up keys, pointed at port 1, where nothing listens.
+
+    Every test gets this one unless it asks for the s3 fixture, so no test can ever upload to
+    the real bucket, even with real AWS keys in ~/.aws.
+    """
+    return boto3.client(
+        "s3",
+        region_name="us-east-2",
+        endpoint_url="http://localhost:1",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        config=BotoConfig(retries={"total_max_attempts": 1}),
+    )
+
+
+@pytest.fixture(scope="session")
+def test_bucket():
+    """The bucket the app uploads to in the tests, in the fake S3 the s3 fixture starts."""
+    return "support-ai-docs-test"
+
+
 @pytest.fixture
-def test_app(session_factory, redis_client, n8n):
-    """The app, using the test database, Redis, and a fake n8n instead of its own."""
+def test_app(session_factory, redis_client, n8n, test_bucket, monkeypatch):
+    """The app, using the test database, Redis, and fakes for n8n and S3 instead of its own."""
 
     def get_test_db():
         with session_factory() as db:
@@ -146,6 +172,9 @@ def test_app(session_factory, redis_client, n8n):
     app.dependency_overrides[get_redis] = lambda: redis_client
     fake_n8n_client = httpx.Client(transport=httpx.MockTransport(n8n.handle))
     app.dependency_overrides[get_http_client] = lambda: fake_n8n_client
+    # Made only when a request asks for it, since most tests never touch S3.
+    app.dependency_overrides[get_s3_client] = unreachable_s3
+    monkeypatch.setattr(settings, "s3_bucket", test_bucket)
     yield app
     app.dependency_overrides.clear()
     fake_n8n_client.close()
@@ -169,6 +198,19 @@ def admin_client(test_app, make_agent, auth_header):
     """A test client logged in as an admin."""
     admin = make_agent(name="Grace Hopper", email="grace@example.com", role=AgentRole.admin)
     return TestClient(test_app, headers=auth_header(admin))
+
+
+@pytest.fixture
+def s3(test_app, test_bucket):
+    """A fake S3 that keeps objects in memory (moto), holding an empty test bucket."""
+    # mock_aws catches every boto3 call to AWS, and swaps in made-up keys while it runs.
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-2")
+        client.create_bucket(
+            Bucket=test_bucket, CreateBucketConfiguration={"LocationConstraint": "us-east-2"}
+        )
+        test_app.dependency_overrides[get_s3_client] = lambda: client
+        yield client
 
 
 @pytest.fixture

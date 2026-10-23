@@ -52,5 +52,13 @@ class Settings(BaseSettings):
     # No alerts are sent until it's set.
     n8n_webhook_secret: str | None = None
 
+    # The private S3 bucket for help docs (infra/aws/README.md). Uploads are turned away
+    # until it's set. AWS keys aren't settings: boto3 finds them by itself, in ~/.aws on the
+    # Mac and from the instance's IAM role on EC2.
+    s3_bucket: str | None = None
+
+    # Where the project's AWS resources are.
+    aws_region: str = "us-east-2"
+
 
 settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.
