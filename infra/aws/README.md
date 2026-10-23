@@ -483,6 +483,12 @@ nc -z -G 5 support.mysolospark.com 8000
 nc -z -G 5 support.mysolospark.com 5678
 ```
 
+### Twilio's webhook
+
+The WhatsApp sandbox's "When a message comes in" URL is `https://support.mysolospark.com/webhooks/twilio`, with POST (Twilio console: Messaging, Try it out, Send a WhatsApp message, Sandbox settings). The first message after the switch got a `200` and made ticket 1 on RDS. Its signature passed, so the API rebuilt the `https://` URL Twilio signed, and the API logged Twilio's own address rather than Docker's gateway.
+
+The sandbox has one URL, so WhatsApp goes to either the server or the Mac, not both. To try a change on the Mac with ngrok, put the ngrok URL there for a while, then put this one back.
+
 ## Pulling the text out of uploads (Lambda)
 
 When an agent uploads a PDF, S3 runs the Lambda function `support-ai-extract-text` (`lambda/extract_text.py`). It reads the PDF, pulls out its text with pypdf, saves the text in the same bucket under `text/` (`uploads/<id>.pdf` becomes `text/<id>.txt`), and calls the API's `POST /webhooks/document-processed`, which marks the document `processed` and records where the text is. Stage 6's worker reads the text from there.
