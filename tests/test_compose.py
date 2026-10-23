@@ -39,7 +39,8 @@ def test_one_command_starts_the_whole_stack(services):
 def test_the_api_and_its_migrations_build_the_same_image(services):
     for name in ["api", "migrate"]:
         assert services[name]["build"]["dockerfile"] == "infra/api.Dockerfile"
-        assert services[name]["image"] == "support-ai-api"
+        # support-ai-api unless API_IMAGE names another, like CI's image in ECR on EC2.
+        assert services[name]["image"] == "${API_IMAGE:-support-ai-api}"
     assert (PROJECT_ROOT / "infra" / "api.Dockerfile").exists()
 
 
