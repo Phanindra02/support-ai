@@ -482,3 +482,87 @@ ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP" \
 nc -z -G 5 support.mysolospark.com 8000
 nc -z -G 5 support.mysolospark.com 5678
 ```
+
+## Pulling the text out of uploads (Lambda)
+
+When an agent uploads a PDF, S3 runs the Lambda function `support-ai-extract-text` (`lambda/extract_text.py`). It reads the PDF, pulls out its text with pypdf, saves the text in the same bucket under `text/` (`uploads/<id>.pdf` becomes `text/<id>.txt`), and calls the API's `POST /webhooks/document-processed`, which marks the document `processed` and records where the text is. Stage 6's worker reads the text from there.
+
+- **The trigger** (`docs-bucket-notification.json`) fires for every new object whose key starts with `uploads/` and ends in `.pdf`. The text goes under `text/`, which the trigger doesn't match, so the function can't keep starting itself. A function that writes to the bucket that triggers it is the classic way to run up a Lambda bill.
+- **`lambda-function.json`** holds the settings: Python 3.14 (the project's version, which Lambda supports until 2029) on Graviton (`arm64`, about 20% cheaper than x86), 512 MB of memory, and a 60-second limit. It finds the API at `API_URL`, Caddy's domain, over the internet: the function runs outside the VPC, which needs no NAT gateway.
+- **The zip** (`lambda/build.sh`) holds only `extract_text.py` and pypdf, about 400 KB, at the version in `uv.lock`'s `lambda` group. The runtime already has boto3.
+- **Role `support-ai-extract-text`** (`lambda-permissions.json`) lets the function read under `uploads/`, add files under `text/`, read its one secret, and write its own logs. It can't delete or change an upload.
+- **The shared secret** is `/support-ai/LAMBDA_WEBHOOK_SECRET` in Parameter Store. The function reads it with `GetParameter`, once per container, and sends it in `X-Webhook-Secret`. The API loads it with the other secrets under `/support-ai`, and turns away any call without it with a 403.
+- **Logs** go to the log group `/aws/lambda/support-ai-extract-text`, which keeps them 14 days instead of forever.
+
+What happens when something goes wrong:
+
+- **The API can't be reached, or answers with an error,** such as a 404 because the PDF reached S3 before `POST /documents` saved its row. The run fails, and Lambda tries it again about 1 minute later, then 2 minutes after that. Each try saves the same text to the same key, and marking a document processed twice changes nothing, so repeats are harmless. After the third failure Lambda drops the event, and the document stays `uploaded`.
+- **pypdf can't read the PDF,** because it's broken or encrypted. Trying again would fail the same way, so the function logs the error and stops without failing. The document stays `uploaded`, and the log says why.
+- **The PDF has no text,** like a scanned page. The empty text is saved, the document is marked `processed`, and a warning is logged. Reading text from images needs OCR, which this project skips.
+
+Cost: nothing, in practice. Lambda's always-free allowance is 1 million requests and 400,000 GB-seconds a month, and pulling the text out of one PDF takes about a GB-second at most. Past the allowance, arm64 costs $0.0000133 per GB-second. Logs cost $0.50 per GB, the text files a fraction of a cent, and Parameter Store's standard parameters are free.
+
+### Create it
+
+```bash
+# On the Mac, from the project root.
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# The shared secret, made here and never shown. Restart the API on the server afterwards,
+# so it loads the secret too (below).
+aws ssm put-parameter --region us-east-2 --name /support-ai/LAMBDA_WEBHOOK_SECRET --type SecureString \
+  --value "$(openssl rand -hex 32)"
+
+aws iam create-role --role-name support-ai-extract-text \
+  --description "The Lambda that pulls the text out of uploaded help docs" \
+  --assume-role-policy-document file://infra/aws/lambda-trust-policy.json
+aws iam put-role-policy --role-name support-ai-extract-text --policy-name extract-text \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/lambda-permissions.json)"
+
+# Made here, rather than by Lambda on first use, so it can have a retention period.
+aws logs create-log-group --region us-east-2 --log-group-name /aws/lambda/support-ai-extract-text
+aws logs put-retention-policy --region us-east-2 \
+  --log-group-name /aws/lambda/support-ai-extract-text --retention-in-days 14
+
+lambda/build.sh
+aws lambda create-function --region us-east-2 --cli-input-json file://infra/aws/lambda-function.json \
+  --role "arn:aws:iam::${ACCOUNT_ID}:role/support-ai-extract-text" --zip-file fileb://build/lambda.zip
+aws lambda wait function-active-v2 --region us-east-2 --function-name support-ai-extract-text
+
+# Let S3 start the function: only this bucket, in this account.
+aws lambda add-permission --region us-east-2 --function-name support-ai-extract-text \
+  --statement-id s3-uploads --action lambda:InvokeFunction --principal s3.amazonaws.com \
+  --source-arn arn:aws:s3:::support-ai-docs-phanindra02 --source-account "$ACCOUNT_ID"
+aws s3api put-bucket-notification-configuration --bucket support-ai-docs-phanindra02 \
+  --notification-configuration "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/docs-bucket-notification.json)"
+```
+
+A new role can take a few seconds to be usable. If `create-function` says the role can't be assumed, wait a moment and run it again.
+
+Then, on the server, restart the API so it loads the new secret from Parameter Store:
+
+```bash
+cd ~/support-ai && docker compose up -d --no-build --force-recreate api
+```
+
+### Change it
+
+After changing `lambda/extract_text.py` or pypdf's version:
+
+```bash
+lambda/build.sh
+aws lambda update-function-code --region us-east-2 --function-name support-ai-extract-text \
+  --zip-file fileb://build/lambda.zip
+```
+
+### Check it
+
+```bash
+aws lambda get-function-configuration --region us-east-2 --function-name support-ai-extract-text \
+  --query '[State,Runtime,Architectures[0],MemorySize,Timeout]'
+aws s3api get-bucket-notification-configuration --bucket support-ai-docs-phanindra02
+# What the function logged in the last hour:
+aws logs tail /aws/lambda/support-ai-extract-text --region us-east-2 --since 1h
+# The text it saved:
+aws s3 ls s3://support-ai-docs-phanindra02/text/
+```

@@ -22,11 +22,12 @@ WORKDIR /app
 
 # The dependencies get a layer of their own, before any code. They change far less often
 # than the code, so Docker reuses this layer, and a code change rebuilds in seconds.
-# --locked fails the build if uv.lock is out of date, and --no-dev leaves out pytest and
-# the other tools only needed for development.
+# --locked fails the build if uv.lock is out of date. --no-default-groups leaves out the
+# dependency groups: pytest and the other tools only needed for development, and pypdf, which
+# only the Lambda uses. --no-dev alone would still install the lambda group.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev
+    uv sync --locked --no-default-groups
 
 
 FROM python:3.14-slim

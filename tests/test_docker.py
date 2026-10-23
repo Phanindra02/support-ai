@@ -69,10 +69,11 @@ def test_the_image_uses_the_projects_python():
 
 
 def test_the_image_installs_exactly_what_uv_lock_says(dockerfile):
-    # --locked stops the build if uv.lock is out of date, and --no-dev leaves out pytest.
+    # --locked stops the build if uv.lock is out of date. --no-default-groups leaves out every
+    # group in pyproject.toml, such as pytest (dev) and pypdf (lambda), not only dev.
     [sync] = [line for line in dockerfile if "uv sync" in line]
     assert "--locked" in sync.split()
-    assert "--no-dev" in sync.split()
+    assert "--no-default-groups" in sync.split()
 
 
 def test_the_code_is_readable_whichever_machine_builds_it(dockerfile):

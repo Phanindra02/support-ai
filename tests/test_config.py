@@ -20,7 +20,13 @@ COMPOSE_FILES = [PROJECT_ROOT / "docker-compose.yml", PROJECT_ROOT / "infra/aws/
 REQUIRED = {"DATABASE_URL": URL, "REDIS_URL": REDIS_URL, "JWT_SECRET_KEY": JWT_SECRET_KEY}
 
 # Values that would let someone sign tokens, fake a webhook, or open the database.
-SECRETS = {"JWT_SECRET_KEY", "TWILIO_AUTH_TOKEN", "N8N_WEBHOOK_SECRET", "POSTGRES_PASSWORD"}
+SECRETS = {
+    "JWT_SECRET_KEY",
+    "TWILIO_AUTH_TOKEN",
+    "N8N_WEBHOOK_SECRET",
+    "LAMBDA_WEBHOOK_SECRET",
+    "POSTGRES_PASSWORD",
+}
 
 
 def env_lines(settings):

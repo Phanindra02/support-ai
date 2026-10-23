@@ -33,10 +33,22 @@ dev = [
     "pyyaml>=6.0.3",
     "ruff>=0.17.1",
 ]
+# The Lambda in lambda/, which pulls the text out of uploaded PDFs. It's packaged on its own
+# (lambda/build.sh), so none of this goes into the API's image.
+lambda = [
+    "pypdf>=6.21.2",
+]
+
+[tool.uv]
+# uv sync installs both groups, so the tests can import the Lambda. The API's image installs
+# neither (infra/api.Dockerfile).
+default-groups = ["dev", "lambda"]
 
 [tool.pytest.ini_options]
-# The project isn't installed as a package, so this lets tests import app from the project root.
-pythonpath = ["."]
+# The project isn't installed as a package, so this lets tests import app from the project root,
+# and the Lambda's extract_text from lambda/ ("lambda" is a Python keyword, so it can't be a
+# package name in an import).
+pythonpath = [".", "lambda"]
 testpaths = ["tests"]
 
 [tool.ruff]

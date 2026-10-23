@@ -303,3 +303,32 @@ class DocumentRead(BaseModel):
     status: DocumentStatus
     uploaded_by_id: int
     created_at: datetime
+
+
+# What the API makes up for each upload (app/storage.py), and where the Lambda puts its text:
+# the same 32 hex digits in both.
+UPLOAD_KEY_PATTERN = r"^uploads/[0-9a-f]{32}\.pdf$"
+TEXT_KEY_PATTERN = r"^text/[0-9a-f]{32}\.txt$"
+
+
+class DocumentProcessed(BaseModel):
+    """What the Lambda sends once it has saved a PDF's text to S3 (lambda/extract_text.py).
+
+    The Lambda only knows the key S3 told it about, not the document's id, so the key finds
+    the row. The keys must look like the ones the API and the Lambda make.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "s3_key": "uploads/70208fbd9d4a4cbc8cbbc7cb6f3b001c.pdf",
+                    "text_s3_key": "text/70208fbd9d4a4cbc8cbbc7cb6f3b001c.txt",
+                }
+            ]
+        },
+    )
+
+    s3_key: Annotated[str, Field(pattern=UPLOAD_KEY_PATTERN)]
+    text_s3_key: Annotated[str, Field(pattern=TEXT_KEY_PATTERN)]
