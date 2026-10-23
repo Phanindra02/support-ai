@@ -465,6 +465,8 @@ Caddy reads the Caddyfile only when it starts, so after changing it, run `docker
 
 ### Check it
 
+When Caddy first started, it had its certificate within 24 seconds: issued by Let's Encrypt (`YE1`) for `support.mysolospark.com`, good for 90 days, and renewed by Caddy about 30 days before it runs out. `/docs` answered `200` over HTTP/2, plain HTTP got a `308` redirect to HTTPS, and the request with `X-Forwarded-For: 1.2.3.4` was logged with the Mac's real address. Ports 8000 and 5678 stayed closed from outside. The commands:
+
 ```bash
 # On the Mac. The certificate is Let's Encrypt's, for this name:
 echo | openssl s_client -connect support.mysolospark.com:443 -servername support.mysolospark.com \
@@ -476,4 +478,7 @@ curl -sI http://support.mysolospark.com/docs | grep -iE '^(HTTP|location)'
 curl -s -o /dev/null -H "X-Forwarded-For: 1.2.3.4" https://support.mysolospark.com/docs
 ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP" \
   "cd support-ai && docker compose logs --tail 3 api" </dev/null
+# The API's and n8n's own ports are still closed. Both time out:
+nc -z -G 5 support.mysolospark.com 8000
+nc -z -G 5 support.mysolospark.com 5678
 ```
