@@ -531,6 +531,9 @@ aws logs put-retention-policy --region us-east-2 \
   --log-group-name /aws/lambda/support-ai-extract-text --retention-in-days 14
 
 lambda/build.sh
+# A new role takes a few seconds to reach Lambda. Without the wait, create-function said "The
+# role defined for the function cannot be assumed by Lambda" the first time.
+sleep 15
 aws lambda create-function --region us-east-2 --cli-input-json file://infra/aws/lambda-function.json \
   --role "arn:aws:iam::${ACCOUNT_ID}:role/support-ai-extract-text" --zip-file fileb://build/lambda.zip
 aws lambda wait function-active-v2 --region us-east-2 --function-name support-ai-extract-text
@@ -543,7 +546,7 @@ aws s3api put-bucket-notification-configuration --bucket support-ai-docs-phanind
   --notification-configuration "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/docs-bucket-notification.json)"
 ```
 
-A new role can take a few seconds to be usable. If `create-function` says the role can't be assumed, wait a moment and run it again.
+If `create-function` still says the role can't be assumed, wait a little longer and run it again, then the commands after it. `put-bucket-notification-configuration` fails until the function exists, because S3 checks that it can call it.
 
 Then, on the server, restart the API so it loads the new secret from Parameter Store:
 
@@ -562,6 +565,8 @@ aws lambda update-function-code --region us-east-2 --function-name support-ai-ex
 ```
 
 ### Check it
+
+The first real upload, a 40 KB PDF, reached S3 at 22:17:56 UTC. The function started within a second, saved 2,167 characters to `text/`, and the API answered its call with `200`, so the document was `processed` by 22:17:58. The run took 0.9 s, plus 0.7 s to start a new container, and used 121 MB of its 512 ([docs/results.md](../../docs/results.md#pdf-text-lambda-stage-5)).
 
 ```bash
 aws lambda get-function-configuration --region us-east-2 --function-name support-ai-extract-text \

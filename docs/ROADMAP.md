@@ -124,8 +124,8 @@ Every resource in this stage costs money. Give the expected monthly cost and get
 - [x] Store secrets in AWS Systems Manager Parameter Store and load them when the app starts. SecureStrings under `/support-ai`, loaded by a settings source in `app/config.py` on EC2 only. The server's `.env` holds no secrets.
 - [x] **[You]** Buy a cheap domain. Point it at the instance, and put Caddy in front of the API for free automatic HTTPS. The API is at `https://support.mysolospark.com`, a DNS-only Cloudflare record pointing at the Elastic IP. Caddy runs on the server's own network and reaches the API at `127.0.0.1:8000`, so the API's trust in forwarded headers didn't change.
 - [x] **[You]** Update the Twilio webhook to the new URL. The sandbox calls `https://support.mysolospark.com/webhooks/twilio`. The first message made ticket 1 on RDS, and its signature passed, so behind Caddy the API rebuilds the `https://` URL that Twilio signed.
-- [ ] Write a Lambda function that runs on every S3 upload and extracts the PDF's text with pypdf.
-- [ ] Have the Lambda save the text as a file in S3, then call the API (with a shared secret) to mark the doc "processed."
+- [x] Write a Lambda function that runs on every S3 upload and extracts the PDF's text with pypdf. `support-ai-extract-text` (`lambda/extract_text.py`), on Python 3.14 and Graviton, runs for each new `uploads/*.pdf`.
+- [x] Have the Lambda save the text as a file in S3, then call the API (with a shared secret) to mark the doc "processed." The text goes to `text/<id>.txt`, and `POST /webhooks/document-processed` checks the secret from Parameter Store. Built with step 13, which has nothing to show until the text is saved. The first real upload was processed within 2 seconds.
 - [ ] Extend CI so merges to main push to ECR, then SSH into EC2 to pull and restart the new image. **[You]** Add the deploy secrets in the GitHub repo settings.
 
 Why Graviton: it runs on ARM like the Mac, so images built locally run on it as-is, and it usually costs less than a standard instance.
