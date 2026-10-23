@@ -1,4 +1,5 @@
-# The EC2 server's changes to docker-compose.yml: the database is RDS, not a container.
+# The EC2 server's changes to docker-compose.yml: the database is RDS, not a container, and
+# the secrets come from Parameter Store.
 #
 # The server's .env turns this file on with the line below, so a plain `docker compose up`
 # there reads both files, and this one's keys replace the same keys in docker-compose.yml:
@@ -7,15 +8,18 @@
 services:
   api:
     environment:
-      # The RDS URL, which the server's .env holds (infra/aws/README.md). Required, so a
-      # server without it stops here instead of starting against a database that isn't there.
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env to the RDS URL}
+      # The app loads DATABASE_URL, JWT_SECRET_KEY, and the other secrets from here when it
+      # starts, with the instance role (infra/aws/README.md).
+      PARAMETER_STORE_PATH: /support-ai
+      # !reset drops docker-compose.yml's URL for the postgres container. A variable would
+      # win over Parameter Store, so it must not be set at all.
+      DATABASE_URL: !reset null
 
   migrate:
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env to the RDS URL}
-    # RDS is always up, so there's no container to wait for. !reset drops the wait for the
-    # postgres container that docker-compose.yml sets.
+      PARAMETER_STORE_PATH: /support-ai
+      DATABASE_URL: !reset null
+    # RDS is always up, so there's no container to wait for.
     depends_on: !reset {}
 
   # A service with a profile only starts when that profile is asked for, so `docker compose up`

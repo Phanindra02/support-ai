@@ -126,10 +126,13 @@ def test_on_ec2_only_the_database_changes(ec2_services):
     assert set(ec2_services) == {"api", "migrate", "postgres"}
 
 
-def test_on_ec2_the_api_and_its_migrations_use_the_rds_url_from_env(ec2_services):
-    # Required (:?), so a server without the URL stops instead of starting without a database.
+def test_on_ec2_the_api_and_its_migrations_load_their_secrets_from_parameter_store(ec2_services):
     for name in ["api", "migrate"]:
-        assert ec2_services[name]["environment"]["DATABASE_URL"].startswith("${DATABASE_URL:?")
+        environment = ec2_services[name]["environment"]
+        assert environment["PARAMETER_STORE_PATH"] == "/support-ai"
+        # An environment variable would win over Parameter Store, so the container's URL from
+        # docker-compose.yml is dropped, not replaced.
+        assert environment["DATABASE_URL"] == RESET
 
 
 def test_on_ec2_the_postgres_container_never_starts(ec2_services):

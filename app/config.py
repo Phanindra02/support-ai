@@ -1,22 +1,95 @@
 from pathlib import Path
+from typing import Any
 
+import boto3
+from botocore.config import Config
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 # The project root, so .env is found no matter which folder a command runs from.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# The app can't start without its settings, so a slow or unreachable Parameter Store should
+# fail the start within seconds, not boto3's default of minutes.
+PARAMETER_STORE_CONFIG = Config(
+    connect_timeout=5,
+    read_timeout=10,
+    retries={"mode": "standard", "total_max_attempts": 3},
+)
 
-class Settings(BaseSettings):
-    """Settings read from environment variables, or from the git-ignored .env file.
 
-    A real environment variable wins over the same name in .env, so Docker and CI can
-    change a setting without editing any file. Names match case-insensitively, so the
-    DATABASE_URL variable fills database_url.
+class ParameterStoreSource(PydanticBaseSettingsSource):
+    """Settings from AWS Systems Manager Parameter Store, under PARAMETER_STORE_PATH.
+
+    /support-ai/DATABASE_URL fills database_url, the same as the DATABASE_URL variable
+    would. SecureString values are decrypted. Only used where PARAMETER_STORE_PATH is set,
+    which is on EC2, so the Mac and CI never call AWS for settings.
     """
 
-    # extra="ignore" skips variables in .env that aren't settings here.
-    model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        # Required by the base class, but unused: __call__ reads every parameter at once.
+        raise NotImplementedError
+
+    def __call__(self) -> dict[str, Any]:
+        # current_state holds what the environment and .env already set.
+        path = self.current_state.get("parameter_store_path")
+        if not path:
+            return {}
+        default_region = self.settings_cls.model_fields["aws_region"].default
+        region = self.current_state.get("aws_region", default_region)
+        ssm = boto3.client("ssm", region_name=region, config=PARAMETER_STORE_CONFIG)
+        values = {}
+        # Only the parameters directly under the path, not deeper ones. One call returns at
+        # most 10, so the paginator asks for the rest.
+        for page in ssm.get_paginator("get_parameters_by_path").paginate(
+            Path=path, WithDecryption=True
+        ):
+            for parameter in page["Parameters"]:
+                name = parameter["Name"].rsplit("/", 1)[-1].lower()
+                # Like .env, a name that isn't a setting is skipped.
+                if name in self.settings_cls.model_fields:
+                    values[name] = parameter["Value"]
+        return values
+
+
+class Settings(BaseSettings):
+    """Settings read from environment variables, the git-ignored .env file, or Parameter Store.
+
+    The first place that sets a value wins, in this order: a real environment variable, then
+    .env, then Parameter Store (only where PARAMETER_STORE_PATH is set), then the default here.
+    So Docker and CI can change a setting without editing any file. Names match
+    case-insensitively, so the DATABASE_URL variable fills database_url.
+    """
+
+    # extra="ignore" skips variables in .env that aren't settings here. env_ignore_empty
+    # treats NAME= as not set, so an empty line in .env doesn't hide the value in Parameter
+    # Store, and leaves a setting with a default at its default.
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env", extra="ignore", env_ignore_empty=True
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # The default order, with Parameter Store added after the environment and .env.
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            ParameterStoreSource(settings_cls),
+            file_secret_settings,
+        )
 
     # No default, so a missing value stops the app at startup with a clear error,
     # instead of quietly connecting to the wrong database.
@@ -60,5 +133,9 @@ class Settings(BaseSettings):
     # Where the project's AWS resources are.
     aws_region: str = "us-east-2"
 
+    # The Parameter Store path to load settings from, such as /support-ai, which holds the
+    # secrets on AWS (infra/aws/README.md). Empty on the Mac and in CI, which skip it.
+    parameter_store_path: str | None = None
 
-settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the environment or .env.
+
+settings = Settings()  # type: ignore[call-arg]  # Values are loaded from the sources above.
