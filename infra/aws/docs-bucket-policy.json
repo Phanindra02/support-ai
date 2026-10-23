@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyPlainHttp",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::support-ai-docs-phanindra02",
+        "arn:aws:s3:::support-ai-docs-phanindra02/*"
+      ],
+      "Condition": { "Bool": { "aws:SecureTransport": "false" } }
+    }
+  ]
+}
