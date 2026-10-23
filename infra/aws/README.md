@@ -482,3 +482,9 @@ ssh -i ~/.ssh/support-ai-ec2 ubuntu@"$SERVER_IP" \
 nc -z -G 5 support.mysolospark.com 8000
 nc -z -G 5 support.mysolospark.com 5678
 ```
+
+### Twilio's webhook
+
+The WhatsApp sandbox's "When a message comes in" URL is `https://support.mysolospark.com/webhooks/twilio`, with POST (Twilio console: Messaging, Try it out, Send a WhatsApp message, Sandbox settings). The first message after the switch got a `200` and made ticket 1 on RDS. Its signature passed, so the API rebuilt the `https://` URL Twilio signed, and the API logged Twilio's own address rather than Docker's gateway.
+
+The sandbox has one URL, so WhatsApp goes to either the server or the Mac, not both. To try a change on the Mac with ngrok, put the ngrok URL there for a while, then put this one back.
