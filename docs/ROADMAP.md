@@ -117,8 +117,8 @@ Every resource in this stage costs money. Give the expected monthly cost and get
 - [x] Create a private S3 bucket for help docs. It's `support-ai-docs-phanindra02`, and `infra/aws/README.md` has how it was made.
 - [x] Add `POST /documents` so an agent can upload a PDF.
 - [x] Save uploads to S3 with boto3, and record each one in a documents table as "uploaded." Built in the same commit as the endpoint, which has nothing to return until an upload is saved.
-- [ ] Create an ECR repository and switch CI to push images there.
-- [ ] Launch a Graviton EC2 instance (t4g family) with an IAM role for S3 and ECR, install Docker, and run the stack with docker compose.
+- [x] Create an ECR repository and switch CI to push images there. CI logs in with GitHub's OIDC token, so no AWS keys are stored in GitHub. See `infra/aws/README.md`.
+- [x] Launch a Graviton EC2 instance (t4g family) with an IAM role for S3 and ECR, install Docker, and run the stack with docker compose. A t4g.small running Ubuntu 24.04, pulling CI's image from ECR.
 - [ ] Create the smallest RDS PostgreSQL instance, and allow connections only from the EC2 instance.
 - [ ] Run the Alembic migrations on RDS and switch the API over to it.
 - [ ] Store secrets in AWS Systems Manager Parameter Store and load them when the app starts.
