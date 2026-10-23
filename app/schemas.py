@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.models import AgentRole, MessageSender, TicketPriority, TicketStatus
+from app.models import AgentRole, DocumentStatus, MessageSender, TicketPriority, TicketStatus
 
 # E.164: a plus sign, then 2 to 15 digits, with a first digit that isn't 0.
 # [0-9] instead of \d, because \d also matches digits from other alphabets.
@@ -287,3 +287,19 @@ class Token(BaseModel):
 
     access_token: str
     token_type: str
+
+
+# Help docs
+
+
+class DocumentRead(BaseModel):
+    """An uploaded help doc, as the API shows it. Where it is in S3 only the API needs."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    size_bytes: int
+    status: DocumentStatus
+    uploaded_by_id: int
+    created_at: datetime

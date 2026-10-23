@@ -36,6 +36,13 @@ class AgentRole(enum.StrEnum):
     admin = "admin"
 
 
+class DocumentStatus(enum.StrEnum):
+    # The PDF is in S3, and its text hasn't been pulled out yet.
+    uploaded = "uploaded"
+    # The Lambda has saved the PDF's text in S3 (later in Stage 5).
+    processed = "processed"
+
+
 class Customer(Base):
     """Someone who contacts support. Their phone number identifies them."""
 
@@ -134,3 +141,27 @@ class Message(Base):
     )
 
     ticket: Mapped[Ticket] = relationship(back_populates="messages")
+
+
+class Document(Base):
+    """A help doc an agent uploaded. The PDF itself is in S3, and this row says where."""
+
+    __tablename__ = "documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # The name the file had on the agent's computer. Only ever shown, as the source of the
+    # bot's answers in Stage 6, and never used as a path.
+    filename: Mapped[str] = mapped_column(String(255))
+    # Where the PDF is in the bucket, like uploads/<32 random hex digits>.pdf. The API makes
+    # it up, so two files named manual.pdf can't overwrite each other. Unique, so the Lambda
+    # can find the row from the key S3 tells it about.
+    s3_key: Mapped[str] = mapped_column(String(255), unique=True)
+    size_bytes: Mapped[int]
+    status: Mapped[DocumentStatus] = mapped_column(
+        Enum(DocumentStatus, validate_strings=True), default=DocumentStatus.uploaded
+    )
+    # No index: nothing looks documents up by who uploaded them, and agents are never deleted.
+    uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("agents.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

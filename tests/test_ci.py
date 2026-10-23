@@ -94,18 +94,53 @@ def test_the_image_is_built_on_arm(jobs):
     assert jobs["image"]["runs-on"].endswith("-arm")
 
 
-def test_only_pushes_to_main_publish_the_image(jobs):
-    for step in jobs["image"]["steps"]:
-        publishes = step.get("with", {}).get("push") is True or "login-action" in step.get("uses", "")
-        if publishes:
-            assert step["if"] == "github.ref == 'refs/heads/main'"
+def test_only_pushes_to_main_log_in_to_aws_and_publish_the_image(jobs):
+    publishing = [
+        step
+        for step in jobs["image"]["steps"]
+        if step.get("with", {}).get("push") is True
+        or step.get("uses", "").startswith("aws-actions/")
+    ]
+    assert len(publishing) == 3  # Log in to AWS, log in to ECR, push.
+    for step in publishing:
+        assert step["if"] == "github.ref == 'refs/heads/main'"
 
 
-def test_only_the_image_job_may_write_packages(workflow, jobs):
+def test_only_the_image_job_may_ask_for_an_aws_token(workflow, jobs):
     assert workflow["permissions"] == {"contents": "read"}
+    assert jobs["image"]["permissions"] == {"contents": "read", "id-token": "write"}
     for name, job in jobs.items():
         if name != "image":
             assert "permissions" not in job
+
+
+def aws_login(jobs):
+    [step] = [s for s in jobs["image"]["steps"] if "configure-aws-credentials" in s.get("uses", "")]
+    return step["with"]
+
+
+def test_ci_logs_in_to_aws_with_a_role_and_no_stored_keys(jobs):
+    login = aws_login(jobs)
+    assert login["role-to-assume"] == "${{ vars.AWS_ROLE_ARN }}"
+    assert "aws-access-key-id" not in login
+    assert "aws-secret-access-key" not in login
+
+
+def test_the_account_number_is_masked_in_the_public_logs(jobs):
+    assert aws_login(jobs)["mask-aws-account-id"] is True
+
+
+def test_the_image_goes_to_the_ecr_repository_the_ci_role_may_push_to(jobs):
+    [meta] = [s for s in jobs["image"]["steps"] if "metadata-action" in s.get("uses", "")]
+    assert meta["with"]["images"] == "${{ steps.ecr.outputs.registry }}/support-ai-api"
+    policy = json.loads((PROJECT_ROOT / "infra" / "aws" / "github-ci-permissions.json").read_text())
+    [push] = [s for s in policy["Statement"] if s["Sid"] == "PushTheApiImage"]
+    region = aws_login(jobs)["aws-region"]
+    assert push["Resource"] == f"arn:aws:ecr:{region}:ACCOUNT_ID:repository/support-ai-api"
+
+
+def test_nothing_is_published_to_github_container_registry_any_more():
+    assert "ghcr.io/phanindra02" not in WORKFLOW.read_text()
 
 
 def test_no_build_args_go_into_the_image(jobs):

@@ -31,6 +31,8 @@ uv run uvicorn app.main:app --reload
 
 Then open http://127.0.0.1:8000/docs to try the API.
 
+Uploading help docs also needs the AWS CLI, logged in with `aws configure` (see [infra/aws/README.md](infra/aws/README.md)). boto3 reads the keys from `~/.aws`, so they never go in `.env`. Without them, uploads get a 503 and everything else works.
+
 Every schema change is an Alembic migration in `alembic/versions/`. After pulling new code, run `uv run alembic upgrade head` again. See [alembic/README](alembic/README) for the other migration commands.
 
 Other commands:
@@ -62,6 +64,7 @@ Then open http://localhost:8000/docs for the API, and http://localhost:5678 for 
 - **Only the API and n8n are reachable from the Mac,** and only at `127.0.0.1`. Postgres and Redis have no published ports, so they can't clash with the ones from Homebrew. For a database shell: `docker compose exec postgres psql -U support`.
 - **Data lives in volumes.** The `postgres-data` and `n8n-data` volumes survive `docker compose down`. `docker compose down -v` deletes them.
 - **Ports 8000 and 5678 are also the ones `uvicorn` and `npx n8n` use,** so stop those first.
+- **Uploads get a 503 in compose on the Mac,** because the container has no AWS credentials, and `~/.aws` isn't shared with it on purpose. On EC2, later in Stage 5, the instance's IAM role gives the container its own. That needs the instance's metadata hop limit set to 2: a container on compose's network is one hop further from the metadata service than the instance itself, and at the default of 1 it gets no credentials.
 - **WhatsApp works the same way.** Run `ngrok http 8000` as before. The API trusts ngrok's forwarded headers only from the Docker network's gateway, `172.28.0.1`. That's where ngrok's connections arrive, and no client can choose that address. `docker-compose.yml` explains why that matters.
 
 ```bash
@@ -78,7 +81,7 @@ Every push, to any branch, runs [.github/workflows/ci.yml](.github/workflows/ci.
 
 - **lint** runs `uv run ruff check .`.
 - **test** runs `uv run pytest`, against Postgres 16 and Redis 8 started as service containers next to the job. Each run makes its own random `JWT_SECRET_KEY`.
-- **image** runs once both pass. It builds the API's image on an ARM runner, and checks that it starts and doesn't run as root. On `main` it then pushes the image to GitHub Container Registry as `ghcr.io/phanindra02/support-ai-api`, tagged `sha-<commit>` (which never changes) and `latest`. No settings or secrets go into the image, so it's safe to publish. They're given to a container when it runs.
+- **image** runs once both pass. It builds the API's image on an ARM runner, and checks that it starts and doesn't run as root. On `main` it then pushes the image to Amazon ECR as `support-ai-api`, tagged `sha-<commit>` (which ECR never lets change) and `latest`, for EC2 to pull. CI logs in to AWS with a short-lived token from GitHub (OIDC), so no AWS keys are stored in GitHub. [infra/aws/README.md](infra/aws/README.md) explains the role it uses. No settings or secrets go into the image. They're given to a container when it runs.
 
 Both install with `uv sync --locked`, which fails if `uv.lock` is out of date, and use the same uv version as the Mac and the Dockerfile. To run the same checks before pushing: `uv run ruff check . && uv run pytest`.
 
@@ -111,6 +114,7 @@ If `main` moves on while a pull request is open, the branch has to be brought up
 | `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | Agents | 200 |
 | `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | Agents | 200 |
 | `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | Agents | 200 |
+| `POST` | `/documents` | Upload a help doc (a PDF) to S3 | Agents | 201 |
 | `POST` | `/webhooks/twilio` | Receive a customer's WhatsApp message | Twilio | 200 |
 
 "Agents" means any logged-in agent, admins included. Every endpoint except logging in and the Twilio webhook needs the token described next. The curl examples below leave the header out to stay short.
@@ -315,18 +319,40 @@ When an agent changes a ticket's priority to `urgent`, the API posts the ticket 
 
 To run n8n, connect Slack, and import the workflow, follow [infra/n8n/README.md](infra/n8n/README.md).
 
+### Upload a help doc
+
+An agent sends a PDF as the multipart form field `file`. The API saves it to the private S3 bucket and records it as `uploaded`. Later in Stage 5, a Lambda pulls out its text and marks it `processed`, and in Stage 6 the WhatsApp bot answers from it.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.0.0.1:8000/documents
+```
+
+```json
+{"id": 1, "filename": "returns-policy.pdf", "size_bytes": 641, "status": "uploaded",
+ "uploaded_by_id": 1, "created_at": "2026-10-23T04:09:22.919392Z"}
+```
+
+- **Only PDFs, up to 10 MiB.** The file must start with `%PDF-`, as every PDF does. The filename and Content-Type are whatever the client says, so neither is trusted. Anything else gets a 422, and a bigger file gets a 413.
+- **Oversized requests are stopped as they arrive.** FastAPI reads a whole body before it checks the login, so `app/body_limit.py` refuses any request body over about 10 MiB with a 413 first: at once if its `Content-Length` says so, or as soon as that many bytes have arrived if it doesn't. Without it, anyone could make the server write an upload of any size to disk. It covers every endpoint, so no JSON body can fill the memory either.
+- **The filename** is trimmed, must be 1 to 255 characters, and can't contain the NUL character. It's only ever shown, never used as a path.
+- **Each upload gets its own key** in S3, like `uploads/7020...001c.pdf`, made from a random UUID. Two files named `manual.pdf` never overwrite each other. The key stays out of the response.
+- **S3 first, then the database.** The row is saved only once the file is in S3, so a row never points to a missing file.
+- **A 503 means S3 isn't ready:** `S3_BUCKET` is empty, or S3 refused the upload or couldn't be reached, such as with no AWS credentials. Nothing is saved, and the agent can try again.
+
 ### Status codes
 
 | Code | When |
 | --- | --- |
 | 200 OK | A list, a ticket, or an updated ticket |
-| 201 Created | A new ticket was opened |
+| 201 Created | A new ticket was opened, or a document was uploaded |
 | 401 Unauthorized | The login failed, or the request's token is missing, expired, or invalid |
 | 403 Forbidden | The agent is logged in but isn't allowed to do this, such as a non-admin managing agents |
 | 404 Not Found | No ticket or agent has that id |
 | 409 Conflict | An agent with that email already exists |
 | 422 Unprocessable Content | The input breaks a rule: a missing, unknown, or invalid field, or an id, `skip`, or `limit` out of range |
+| 413 Content Too Large | An uploaded file is over 10 MiB, or any request body is over the app's limit |
 | 429 Too Many Requests | This IP made more than 60 requests in the last 60 seconds |
+| 503 Service Unavailable | A setting the endpoint needs is empty (`TWILIO_AUTH_TOKEN` or `S3_BUCKET`), or S3 couldn't save an upload |
 
 A 404 returns:
 
@@ -354,10 +380,10 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 ## Project layout
 
-- `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, and `config.py` the settings.
+- `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, `storage.py` the S3 uploads, and `config.py` the settings.
 - `alembic/`: database migrations.
 - `docker-compose.yml`: the whole stack in containers. It sits at the root so `docker compose` finds it, and the `.env` beside it, without flags.
-- `infra/`: the API's Dockerfile (`api.Dockerfile`), the exported [n8n workflow](infra/n8n/README.md), and the [rules that protect main](infra/github/README.md).
+- `infra/`: the API's Dockerfile (`api.Dockerfile`), the exported [n8n workflow](infra/n8n/README.md), the [rules that protect main](infra/github/README.md), and the [AWS setup](infra/aws/README.md).
 - `.github/workflows/ci.yml`: the CI workflow.
 - `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
 - `tests/`: pytest tests.

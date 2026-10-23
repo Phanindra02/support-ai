@@ -5,12 +5,19 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 
+from app.body_limit import BodySizeLimit
 from app.rate_limit import rate_limit
-from app.routers import agents, auth, tickets, webhooks
+from app.routers import agents, auth, documents, tickets, webhooks
+from app.routers.documents import MAX_PDF_BYTES
 from app.schemas import ErrorResponse
+
+# The biggest body any endpoint needs: a 10 MiB PDF, plus room for the multipart form around
+# it. Every other request is a small form or JSON.
+MAX_BODY_BYTES = MAX_PDF_BYTES + 64 * 1024
 
 # Tables come from Alembic migrations (uv run alembic upgrade head), not from the app itself.
 app = FastAPI(title="Support AI")
+app.add_middleware(BodySizeLimit, max_bytes=MAX_BODY_BYTES)
 
 # Every endpoint on this router checks the rate limit first. The Twilio webhook doesn't, and
 # webhooks.py explains why. /docs isn't an endpoint, so it isn't limited either.
@@ -46,5 +53,6 @@ def root():
 api.include_router(auth.router)
 api.include_router(agents.router)
 api.include_router(tickets.router)
+api.include_router(documents.router)
 app.include_router(api)
 app.include_router(webhooks.router)

@@ -112,11 +112,11 @@ Done when: the app runs on EC2 over HTTPS with RDS and S3, a Lambda processes up
 
 Every resource in this stage costs money. Give the expected monthly cost and get a yes before creating anything, and ask which region to use.
 
-- [ ] **[You]** Create an AWS account and turn on MFA for the root user.
-- [ ] **[You]** Create an IAM admin user for daily work and set a monthly budget alert. Install the AWS CLI with Homebrew, then **[You]** run `aws configure`.
-- [ ] Create a private S3 bucket for help docs.
-- [ ] Add `POST /documents` so an agent can upload a PDF.
-- [ ] Save uploads to S3 with boto3, and record each one in a documents table as "uploaded."
+- [x] **[You]** Create an AWS account and turn on MFA for the root user. The account is on the Paid plan, which never suspends at six months, and the region is `us-east-2` (Ohio).
+- [x] **[You]** Create an IAM admin user for daily work and set a monthly budget alert. Install the AWS CLI with Homebrew, then **[You]** run `aws configure`. The user is `phani-admin`, with MFA, and the budget is $20 a month.
+- [x] Create a private S3 bucket for help docs. It's `support-ai-docs-phanindra02`, and `infra/aws/README.md` has how it was made.
+- [x] Add `POST /documents` so an agent can upload a PDF.
+- [x] Save uploads to S3 with boto3, and record each one in a documents table as "uploaded." Built in the same commit as the endpoint, which has nothing to return until an upload is saved.
 - [ ] Create an ECR repository and switch CI to push images there.
 - [ ] Launch a Graviton EC2 instance (t4g family) with an IAM role for S3 and ECR, install Docker, and run the stack with docker compose.
 - [ ] Create the smallest RDS PostgreSQL instance, and allow connections only from the EC2 instance.
