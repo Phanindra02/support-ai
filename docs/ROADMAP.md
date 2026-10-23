@@ -132,9 +132,9 @@ Why Graviton: it runs on ARM like the Mac, so images built locally run on it as-
 
 ### System design
 
-- [ ] Learn vertical vs horizontal scaling, load balancers, stateless services, and availability zones.
-- [ ] Learn when to use object storage, a CDN, and serverless functions like Lambda.
-- [ ] Apply it: draw the AWS setup and mark every single point of failure.
+- [x] Learn vertical vs horizontal scaling, load balancers, stateless services, and availability zones. See `docs/system-design/09-scaling-and-availability.md`.
+- [x] Learn when to use object storage, a CDN, and serverless functions like Lambda. See `docs/system-design/10-storage-cdn-serverless.md`.
+- [x] Apply it: draw the AWS setup and mark every single point of failure. See `docs/system-design/11-aws-setup.md`.
 
 ## Stage 6: RAG with LangChain and pgvector
 

@@ -76,3 +76,15 @@ curl http://127.0.0.1:8000/    # {"message": "Support API is running"}
 ```
 
 Then try what broke: log in at `/docs`, send a WhatsApp message, or mark a ticket urgent. Afterwards, write down what went wrong and what would have caught it sooner, such as a test, a health check, or a canary.
+
+
+## On EC2, through CI's deploy document
+
+Every merge to `main` deploys itself (infra/aws/README.md). To go back to an earlier build, run the same document with that commit's full id. The server's code stays where it is, and its `.env` points `API_IMAGE` back at that commit's image:
+
+```bash
+aws ssm send-command --region us-east-2 --document-name support-ai-deploy \
+  --instance-ids "$INSTANCE_ID" --parameters "commit=<full commit id on main>"
+```
+
+The next merge deploys forward again. A rollback across a migration needs `alembic downgrade` first, as above.

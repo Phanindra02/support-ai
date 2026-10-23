@@ -106,11 +106,12 @@ def test_only_pushes_to_main_log_in_to_aws_and_publish_the_image(jobs):
         assert step["if"] == "github.ref == 'refs/heads/main'"
 
 
-def test_only_the_image_job_may_ask_for_an_aws_token(workflow, jobs):
+def test_only_the_image_and_deploy_jobs_may_ask_for_an_aws_token(workflow, jobs):
     assert workflow["permissions"] == {"contents": "read"}
-    assert jobs["image"]["permissions"] == {"contents": "read", "id-token": "write"}
     for name, job in jobs.items():
-        if name != "image":
+        if name in {"image", "deploy"}:
+            assert job["permissions"] == {"contents": "read", "id-token": "write"}
+        else:
             assert "permissions" not in job
 
 
@@ -169,8 +170,9 @@ def protection():
 
 def test_every_ci_job_must_pass_before_a_merge(jobs, protection):
     # A renamed job would never report under its old name, so pull requests would wait forever.
+    # deploy only runs after a merge, so a pull request can't wait on it.
     required = protection["required_status_checks"]["checks"]
-    assert {check["context"] for check in required} == set(jobs)
+    assert {check["context"] for check in required} == set(jobs) - {"deploy"}
 
 
 def test_only_github_actions_can_pass_a_required_check(protection):
