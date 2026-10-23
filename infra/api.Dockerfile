@@ -46,6 +46,13 @@ COPY --chmod=u=rwX,go=rX alembic ./alembic
 COPY --chmod=u=rwX,go=rX app ./app
 COPY --chmod=u=rwX,go=rX scripts/__init__.py scripts/create_agent.py ./scripts/
 
+# Amazon's root certificates for RDS in us-east-2. The RDS URL asks for sslmode=verify-full,
+# so the database driver (libpq) checks that the server's certificate was signed by one of
+# these and names the host it connected to. PGSSLROOTCERT tells libpq where they are. Postgres
+# without TLS, like the compose container on the Mac, never looks at them.
+COPY --chmod=u=rwX,go=rX infra/aws/rds-ca-us-east-2.pem ./certs/
+ENV PGSSLROOTCERT=/app/certs/rds-ca-us-east-2.pem
+
 # The virtual environment's programs (uvicorn, alembic, python) come first on the PATH.
 # PYTHONUNBUFFERED sends log lines out at once, so `docker compose logs` shows them live.
 ENV PATH="/app/.venv/bin:$PATH" \

@@ -12,7 +12,7 @@ URL = "postgresql+psycopg://user:secret@db.example.com:5432/support"
 REDIS_URL = "redis://cache.example.com:6379/0"
 JWT_SECRET_KEY = "k" * 64
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
-COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
+COMPOSE_FILES = [PROJECT_ROOT / "docker-compose.yml", PROJECT_ROOT / "infra/aws/compose.ec2.yml"]
 
 # The settings with no default, which the app can't start without.
 REQUIRED = {"DATABASE_URL": URL, "REDIS_URL": REDIS_URL, "JWT_SECRET_KEY": JWT_SECRET_KEY}
@@ -83,7 +83,8 @@ def test_a_short_jwt_secret_is_an_error(no_settings_in_environment, monkeypatch)
 
 def test_env_example_lists_every_setting():
     # The app's settings, plus the ${NAME} values docker compose fills in from .env.
-    compose_names = set(re.findall(r"\$\{(\w+)", COMPOSE_FILE.read_text()))
+    compose_text = "".join(path.read_text() for path in COMPOSE_FILES)
+    compose_names = set(re.findall(r"\$\{(\w+)", compose_text))
     expected = {name.upper() for name in Settings.model_fields} | compose_names
     assert env_example_values().keys() == expected
 

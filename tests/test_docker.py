@@ -5,6 +5,7 @@ CI builds the real image.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -79,3 +80,15 @@ def test_the_code_is_readable_whichever_machine_builds_it(dockerfile):
     for line in final_stage(dockerfile):
         if line.startswith("COPY ") and "--from=" not in line:
             assert "--chmod=u=rwX,go=rX" in line.split()
+
+
+def test_the_image_has_the_rds_certificates_where_the_driver_looks(dockerfile):
+    # libpq, the driver under psycopg, reads PGSSLROOTCERT to check the database's certificate.
+    final = final_stage(dockerfile)
+    [workdir] = [line.split()[1] for line in final if line.startswith("WORKDIR ")]
+    [copy] = [line for line in final if "rds-ca-us-east-2.pem" in line and line.startswith("COPY ")]
+    source, destination = copy.split()[-2:]
+    assert (PROJECT_ROOT / source).exists()
+    assert (
+        f"ENV PGSSLROOTCERT={workdir}/{destination.removeprefix('./')}{Path(source).name}" in final
+    )
