@@ -1,9 +1,10 @@
-"""Tune both priority models with cross-validation, with and without extra weight for rare labels.
+"""Tune both models with cross-validation, with and without extra weight for rare labels.
 
 Settings are chosen by their cross-validation score on the training set only. The test set
-scores each model once at the end, so it stays a fair check on tickets no choice was made with.
+scores each model once at the end, so it stays a fair check on texts no choice was made with.
 
 uv run python -m ml.tune tickets
+uv run python -m ml.tune tweets
 """
 
 import sys
@@ -18,7 +19,7 @@ from ml.train import DATASETS, MODELS, evaluate, print_report
 
 GRIDS = {
     # C is how far the model may bend to fit the training tickets. Small C keeps the weights
-    # small, which guards against learning words that only happen to go with one priority.
+    # small, which guards against learning words that only happen to go with one label.
     "baseline": {"logisticregression__C": [0.3, 1, 3, 10, 30, 100]},
     # Shallow trees mix fewer features each, but more of them are needed.
     "xgboost": {"labeledxgbclassifier__max_depth": [3, 6]},
@@ -28,7 +29,7 @@ FOLDS = 3
 
 
 def fit_params(model: Pipeline, labels: pd.Series, weighted: bool) -> dict:
-    """Weights that make each label count the same in total, so the rare low tickets count more.
+    """Weights that make each label count the same in total, so the rare labels count more.
 
     Both models take sample weights, which XGBoost needs since it has no class_weight setting.
     """
@@ -39,7 +40,7 @@ def fit_params(model: Pipeline, labels: pd.Series, weighted: bool) -> dict:
 
 
 def tune(name: str, train: pd.DataFrame, weighted: bool, folds: int = FOLDS) -> GridSearchCV:
-    """Try each setting in the model's grid, then refit the best on all the training tickets."""
+    """Try each setting in the model's grid, then refit the best on the whole training set."""
     model = MODELS[name]()
     search = GridSearchCV(
         model,
@@ -53,17 +54,19 @@ def tune(name: str, train: pd.DataFrame, weighted: bool, folds: int = FOLDS) -> 
 
 def main(dataset: str) -> None:
     train, test = split(clean(DATASETS[dataset]()))
+    labels = sorted(train["label"].unique())
     results = []
     for name in GRIDS:
         for weighted in [False, True]:
             search = tune(name, train, weighted)
             report = evaluate(search.best_estimator_, test)
+            recall = {label: round(report[label]["recall"], 3) for label in labels}
             results.append((search.best_score_, name, weighted, search.best_params_, report))
             print(
                 f"{name}, weighted={weighted}: best {search.best_params_},"
                 f" cross-validation macro F1 {search.best_score_:.3f},"
                 f" test macro F1 {report['macro avg']['f1-score']:.3f},"
-                f" test low recall {report['low']['recall']:.3f}"
+                f" test recall {recall}"
             )
     score, name, weighted, params, report = max(results, key=lambda result: result[0])
     print(f"\nBest by cross-validation ({score:.3f}): {name}, weighted={weighted}, {params}")
