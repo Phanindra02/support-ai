@@ -5,9 +5,10 @@ import json
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from app.config import settings
-from app.models import Ticket, TicketPriority
+from app.models import ModelName, Prediction, Ticket, TicketPriority
 from app.queue import TRIAGE_RETRY, TRIAGE_TICKET, get_queue, make_queue
 from worker.jobs import triage
 
@@ -150,6 +151,26 @@ def test_a_high_priority_ticket_or_a_very_negative_customer_alerts_the_team(
     assert alert["priority"] == priority["label"]
     # The n8n workflow's Slack message reads "Marked urgent by <this>."
     assert alert["marked_urgent_by"] == reason
+
+
+def test_both_predictions_are_saved_for_retraining(
+    make_ticket, session_factory, model_service_url, alerts
+):
+    ticket = make_ticket()
+    priority = prediction("low", low=0.7, medium=0.2, high=0.1)
+    models, _ = model_service(priority)
+
+    with session_factory() as db:
+        triage(db, models, alerts, ticket["id"])
+
+    with session_factory() as db:
+        saved = db.scalars(select(Prediction).order_by(Prediction.id)).all()
+        assert [
+            (row.ticket_id, row.model, row.version, row.label, row.scores) for row in saved
+        ] == [
+            (ticket["id"], ModelName.priority, 1, "low", priority["scores"]),
+            (ticket["id"], ModelName.sentiment, 1, "neutral", CALM["scores"]),
+        ]
 
 
 def test_a_negative_customer_below_the_bar_sends_no_alert(

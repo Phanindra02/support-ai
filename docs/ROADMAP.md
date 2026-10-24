@@ -179,7 +179,7 @@ Done when: a model service sets each new ticket's priority, flags angry customer
 - [x] Build a separate FastAPI model service with `/predict/priority` and `/predict/sentiment`, and containerize it. `ml/service.py`, in `infra/model.Dockerfile`, as compose's `model` service. Each prediction gives the label, every label's probability, and the model version. It cleans text with the same `ml/text.py` as training. It stays off the server until its image is in ECR.
 - [x] When a new ticket arrives, have the worker call the model service and set the priority. Every new ticket, from the API or WhatsApp, queues `worker.jobs.predict_priority`, which sends the subject and first message to `/predict/priority` and saves the label. A failure leaves the ticket at medium and tries again after 5 s, 30 s, and 2 min. It's off on the server until the model service runs there.
 - [x] Trigger the n8n alert if priority is high or sentiment is very negative. The worker's job, now `triage_ticket`, also asks `/predict/sentiment` about the first message, and alerts through the same n8n workflow when the priority is high or "negative" scores 0.8 or more. The reason fills the Slack message's "Marked urgent by", so the workflow didn't change.
-- [ ] Log every prediction next to the priority the agent finally set, as data for retraining later.
+- [x] Log every prediction next to the priority the agent finally set, as data for retraining later. The job saves both predictions (label, every score, and model version) to a new `predictions` table, in the same commit as the priority. `scripts/export_predictions.py` writes each closed ticket's text, predicted priority, and final priority as CSV.
 
 ### System design
 
