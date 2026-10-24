@@ -24,12 +24,13 @@ EMBED_DOCUMENT = "worker.jobs.embed_document"
 # (scripts/failed_jobs.py). Running it again is safe: it replaces the document's chunks.
 EMBED_RETRY = Retry(max=3, interval=[30, 120, 600])
 
-# The job that asks the model service for a new ticket's priority (worker/jobs.py).
-PREDICT_PRIORITY = "worker.jobs.predict_priority"
+# The job that asks the model service about a new ticket: it sets the priority, and alerts the
+# team if the ticket is high priority or the customer very negative (worker/jobs.py).
+TRIAGE_TICKET = "worker.jobs.triage_ticket"
 
 # Shorter waits than embedding: an agent may open the ticket within minutes, and the model
 # service is only down while it restarts.
-PREDICT_RETRY = Retry(max=3, interval=[5, 30, 120])
+TRIAGE_RETRY = Retry(max=3, interval=[5, 30, 120])
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,8 @@ def get_queue() -> Queue:
 QueueDep = Annotated[Queue, Depends(get_queue)]
 
 
-def queue_priority_prediction(queue: Queue, ticket_id: int) -> None:
-    """Queue the priority prediction for a new ticket, if the model service is set up.
+def queue_triage(queue: Queue, ticket_id: int) -> None:
+    """Queue a new ticket's triage job, if the model service is set up.
 
     A ticket is never turned away over this. If Redis is down, the ticket is still saved, at
     medium priority, and an agent can set it.
@@ -62,6 +63,6 @@ def queue_priority_prediction(queue: Queue, ticket_id: int) -> None:
     if not settings.model_service_url:
         return
     try:
-        queue.enqueue(PREDICT_PRIORITY, ticket_id, retry=PREDICT_RETRY)
+        queue.enqueue(TRIAGE_TICKET, ticket_id, retry=TRIAGE_RETRY)
     except RedisError as error:
-        logger.warning("Couldn't queue ticket %s for a priority prediction: %s", ticket_id, error)
+        logger.warning("Couldn't queue ticket %s for triage: %s", ticket_id, error)

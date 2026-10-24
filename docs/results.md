@@ -322,3 +322,19 @@ Measured on 2026-10-24 with the compose stack on the Mac (`docker compose up -d 
 
 - The ticket was created at medium, and 4 seconds later it was high.
 - The worker's log says `worker.jobs.predict_priority(1)` completed in 0.66 seconds, which covers reading the ticket, calling the model container, and saving the priority.
+
+## "Very negative" threshold (Stage 7)
+
+Measured on 2026-10-24 by scoring the 2,856 test tweets with the saved sentiment model (`models/sentiment/v1`). A tweet counts as flagged when the model's "negative" score is at least the threshold. Precision is the share of flagged tweets that really are negative. Recall is the share of negative tweets that get flagged.
+
+| Threshold | Flagged | Share of all tweets | Precision | Recall |
+|---|---|---|---|---|
+| 0.5 | 1,529 | 53.5% | 0.914 | 0.771 |
+| 0.6 | 1,242 | 43.5% | 0.947 | 0.648 |
+| 0.7 | 907 | 31.8% | 0.968 | 0.484 |
+| **0.8** | **580** | **20.3%** | **0.991** | **0.317** |
+| 0.9 | 244 | 8.5% | 0.992 | 0.133 |
+| 0.95 | 92 | 3.2% | 0.978 | 0.050 |
+
+- 0.8 was chosen. Almost every flagged message is really negative (99.1%), and only the angriest fifth of messages alert. At 0.5, over half of all messages would alert, which trains a team to ignore the channel. Above 0.8, precision stops rising while recall keeps falling.
+- On four made-up support messages, the alert reasons came out as expected: no alert for "Where is my order?" or a password question, and an alert for an angry refund request (negative 0.94) and for a site outage (high priority 0.97). The outage also scored negative 0.82, though it's written calmly. A model trained on airline tweets reads outage words as anger, which is a cost of training on another domain's data.

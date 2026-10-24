@@ -12,7 +12,7 @@ from app.alerts import get_http_client, send_urgent_alert
 from app.cache import RedisDep, clear_cache, read_cache, write_cache
 from app.database import SessionDep
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
-from app.queue import QueueDep, queue_priority_prediction
+from app.queue import QueueDep, queue_triage
 from app.schemas import (
     MAX_INT,
     ErrorResponse,
@@ -132,7 +132,7 @@ def create_ticket(ticket_in: TicketCreate, db: SessionDep, redis: RedisDep, queu
     clear_cache(redis, STATS_KEY)
     db.refresh(ticket)
     # After the commit too, or the worker could look for the ticket before it's saved.
-    queue_priority_prediction(queue, ticket.id)
+    queue_triage(queue, ticket.id)
     return ticket
 
 
