@@ -183,7 +183,7 @@ Done when: a model service sets each new ticket's priority, flags angry customer
 
 ### System design
 
-- [ ] Learn batch vs real-time predictions, model versioning, and monitoring for drift.
+- [x] Learn batch vs real-time predictions, model versioning, and monitoring for drift. `docs/system-design/14-ml-serving.md`.
 - [ ] Learn safe model rollouts: shadow testing and gradual traffic shifts.
 - [ ] Apply it: write down how to switch the priority model to a new version without downtime.
 
