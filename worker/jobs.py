@@ -15,7 +15,7 @@ from app.cache import clear_cache, get_redis
 from app.config import settings
 from app.database import SessionLocal
 from app.embeddings import get_embeddings
-from app.models import Chunk, Document, Message, Ticket, TicketPriority
+from app.models import Chunk, Document, Message, ModelName, Prediction, Ticket, TicketPriority
 from app.routers.tickets import STATS_KEY
 from app.schemas import UrgentAlert
 from app.storage import get_s3_client, read_text
@@ -128,6 +128,16 @@ def ask_model(client: httpx.Client, name: str, text: str) -> dict:
     return response.json()
 
 
+def prediction_row(ticket: Ticket, model: ModelName, prediction: dict) -> Prediction:
+    return Prediction(
+        ticket=ticket,
+        model=model,
+        version=prediction["version"],
+        label=prediction["label"],
+        scores=prediction["scores"],
+    )
+
+
 def alert_reason(priority: dict, sentiment: dict | None) -> str | None:
     """Why the team should hear about the ticket now, for the Slack message, or None."""
     reasons = []
@@ -142,7 +152,7 @@ def alert_reason(priority: dict, sentiment: dict | None) -> str | None:
 def triage(
     db: Session, models: httpx.Client, alerts: httpx.Client, ticket_id: int
 ) -> TicketPriority | None:
-    """Predict the ticket's priority and the customer's mood, save the priority, and alert.
+    """Predict the ticket's priority and the customer's mood, save both, and alert.
 
     The job runs seconds after the ticket opens, before an agent could have set a priority.
     Both predictions come before anything is saved, so if either call fails, nothing has
@@ -158,6 +168,10 @@ def triage(
     # The mood is in the customer's own words, not the subject.
     sentiment = ask_model(models, "sentiment", message) if message.strip() else None
     ticket.priority = TicketPriority(priority["label"])
+    # Saved in the same commit as the priority, as data for retraining.
+    db.add(prediction_row(ticket, ModelName.priority, priority))
+    if sentiment is not None:
+        db.add(prediction_row(ticket, ModelName.sentiment, sentiment))
     db.commit()
 
     reason = alert_reason(priority, sentiment)

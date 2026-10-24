@@ -3,6 +3,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    JSON,
     DateTime,
     Enum,
     ForeignKey,
@@ -31,6 +32,13 @@ class TicketPriority(enum.StrEnum):
     medium = "medium"
     high = "high"
     urgent = "urgent"
+
+
+class ModelName(enum.StrEnum):
+    """The model service's models (ml/service.py)."""
+
+    priority = "priority"
+    sentiment = "sentiment"
 
 
 class MessageSender(enum.StrEnum):
@@ -210,3 +218,28 @@ class Chunk(Base):
     )
 
     document: Mapped[Document] = relationship()
+
+
+class Prediction(Base):
+    """What a model said about a ticket when it opened, kept as data for retraining.
+
+    Read next to the ticket's priority once an agent has closed it, a priority prediction
+    shows what the model said and what the team decided (scripts/export_predictions.py).
+    """
+
+    __tablename__ = "predictions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), index=True)
+    model: Mapped[ModelName] = mapped_column(Enum(ModelName, validate_strings=True))
+    # The version that made the prediction, so a new version's can be told from an old one's.
+    version: Mapped[int]
+    label: Mapped[str] = mapped_column(String(20))
+    # Every label's probability, not only the winner's, so a later check can see whether the
+    # model grows less sure over time: a sign that new tickets look unlike the training ones.
+    scores: Mapped[dict[str, float]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    ticket: Mapped[Ticket] = relationship()

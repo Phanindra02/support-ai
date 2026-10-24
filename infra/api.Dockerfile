@@ -47,7 +47,7 @@ COPY --chmod=u=rwX,go=rX alembic.ini ./
 COPY --chmod=u=rwX,go=rX alembic ./alembic
 COPY --chmod=u=rwX,go=rX app ./app
 COPY --chmod=u=rwX,go=rX worker ./worker
-COPY --chmod=u=rwX,go=rX scripts/__init__.py scripts/create_agent.py scripts/failed_jobs.py ./scripts/
+COPY --chmod=u=rwX,go=rX scripts/__init__.py scripts/create_agent.py scripts/export_predictions.py scripts/failed_jobs.py ./scripts/
 
 # Amazon's root certificates for RDS in us-east-2. The RDS URL asks for sslmode=verify-full,
 # so the database driver (libpq) checks that the server's certificate was signed by one of
