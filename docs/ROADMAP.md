@@ -151,8 +151,8 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 - [x] Build `POST /ask`: embed the question and pull the 4 closest chunks. pgvector orders chunks by cosine distance to the question. Only logged-in agents may ask, since every question costs an OpenAI call; customers reach the bot through WhatsApp.
 - [x] Send those chunks to the LLM with instructions to answer only from them and say "I don't know" otherwise. `gpt-4.1-mini` at temperature 0, with the rules in the system message and the customer's words in their own. Built with steps 10 and 12 in `app/bot.py`, since none is useful alone.
 - [x] Return the answer along with the names of the source docs. Each doc once, closest first, and none when the bot doesn't know.
-- [ ] Route WhatsApp messages to the bot first.
-- [ ] If the bot doesn't know, open a ticket for a human and tell the customer someone will follow up.
+- [x] Route WhatsApp messages to the bot first. A customer whose ticket the team is already working on keeps talking to the team. Each OpenAI call gets 6 seconds and no retries, so the reply fits in the 15 seconds Twilio waits.
+- [x] If the bot doesn't know, open a ticket for a human and tell the customer someone will follow up. The same happens when OpenAI fails or the message has no text, so a customer always gets a reply. Built with step 13, since the old ticket path is the bot's fallback.
 - [ ] Cache answers in Redis, keyed by the cleaned-up question text.
 - [ ] Write 25 test questions with known answers.
 - [ ] Measure how often the right chunk comes back and the answer is correct, and record it in `docs/results.md`.

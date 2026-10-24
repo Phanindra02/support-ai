@@ -16,6 +16,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from app.config import settings
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
 from app.routers.tickets import STATS_KEY
+from app.routers.webhooks import MAX_REPLY_LENGTH, confirmation
 
 AUTH_TOKEN = "made-up-twilio-auth-token-for-tests"
 URL = "http://testserver/webhooks/twilio"  # The URL the test client calls.
@@ -540,3 +541,97 @@ def test_a_whatsapp_ticket_marked_urgent_reaches_slack(client, agent_client, n8n
     # The customer writes again. The ticket is already urgent, so Slack hears nothing new.
     assert send(client, "Any news?").text == EMPTY_TWIML
     assert len(n8n.requests) == 1
+
+
+# The bot answers first
+
+
+@pytest.fixture
+def refund_docs(save_chunks):
+    """Help docs that say how long a refund takes, pointing the way every question does."""
+    save_chunks([("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0))])
+
+
+def test_the_bot_answers_from_the_docs_and_names_them(
+    client, use_bot, save_chunks, session_factory
+):
+    save_chunks(
+        [
+            ("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0)),
+            ("payments.pdf", "Refunds go to the card you paid with.", (1.0, 0.1)),
+        ]
+    )
+    llm = use_bot(reply="Refunds take 5 days, back to the card you paid with.")
+
+    response = send(client, "How long does a refund take?")
+
+    assert replies(response) == [
+        "Refunds take 5 days, back to the card you paid with.\n\nSources: refunds.pdf, payments.pdf"
+    ]
+    assert llm.prompts[0][1].content.endswith("Customer's question: How long does a refund take?")
+    # An answered question needs no one from the team, so nothing is stored.
+    assert all_tickets(session_factory) == []
+
+
+def test_one_source_is_named_as_one(client, use_bot, refund_docs):
+    use_bot(reply="Refunds take 5 days.")
+
+    response = send(client, "How long does a refund take?")
+
+    assert replies(response) == ["Refunds take 5 days.\n\nSource: refunds.pdf"]
+
+
+def test_when_the_bot_doesnt_know_a_ticket_opens_and_someone_will_follow_up(
+    client, use_bot, refund_docs, session_factory
+):
+    use_bot(reply="I don't know.")
+
+    response = send(client, "Can I change my delivery address?")
+
+    [ticket] = all_tickets(session_factory)
+    assert ticket["subject"] == "Can I change my delivery address?"
+    assert ticket["messages"] == [(MessageSender.customer, "Can I change my delivery address?")]
+    assert replies(response) == [confirmation(ticket["id"])]
+
+
+def test_a_customer_talking_to_the_team_doesnt_get_the_bot(client, use_bot, refund_docs):
+    llm = use_bot(reply="I don't know.")
+    send(client, "Can I change my delivery address?")  # Opens a ticket.
+
+    # The bot would know this one, but a person is already looking after this customer.
+    response = send(client, "And how long does a refund take?")
+
+    assert response.text == EMPTY_TWIML  # It joined the ticket, which already has a reply.
+    assert len(llm.prompts) == 1
+
+
+def test_when_openai_fails_the_message_goes_to_the_team(
+    client, use_bot, refund_docs, session_factory, caplog
+):
+    use_bot(timed_out=True)
+
+    response = send(client, "How long does a refund take?")
+
+    [ticket] = all_tickets(session_factory)
+    assert replies(response) == [confirmation(ticket["id"])]
+    assert "The bot couldn't reach OpenAI" in caplog.text
+
+
+def test_a_message_without_text_goes_straight_to_the_team(
+    client, use_bot, refund_docs, session_factory
+):
+    llm = use_bot()
+
+    send(client, "", NumMedia="1")
+
+    assert llm.prompts == []
+    assert len(all_tickets(session_factory)) == 1
+
+
+def test_a_long_answer_is_cut_to_fit_one_whatsapp_message(client, use_bot, refund_docs):
+    use_bot(reply="Refunds take 5 days. " * 100)
+
+    [reply] = replies(send(client, "How long does a refund take?"))
+
+    assert len(reply) == MAX_REPLY_LENGTH == 1600
+    assert reply.endswith("\u2026")

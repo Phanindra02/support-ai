@@ -7,7 +7,9 @@ refund policy, and saying "I don't know" lets a human take over instead.
 """
 
 from dataclasses import dataclass
+from typing import Annotated
 
+from fastapi import Depends
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -16,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
+from app.embeddings import get_embeddings
 from app.models import Chunk
 
 # OpenAI's small, cheap model ($0.40 per million tokens in, $1.60 out). Rewording a few
@@ -29,6 +32,11 @@ CHUNK_COUNT = 4
 # About 1,200 characters, under the 1,600 Twilio allows in one WhatsApp message.
 MAX_ANSWER_TOKENS = 300
 
+# Twilio waits 15 seconds for the webhook's reply. Each OpenAI call gets 6, with no retries,
+# so even when both are slow there's time left to hand the message to a human instead. A
+# retry isn't worth the wait, because the fallback, a person, is better than a late answer.
+OPENAI_TIMEOUT = 6
+
 # What the bot says when the chunks don't hold the answer. Step 14 checks for it, to hand the
 # question to a human.
 DONT_KNOW = "I don't know."
@@ -39,6 +47,14 @@ excerpts you are given. Keep the answer short and friendly, in plain text.
 
 If the excerpts don't contain the answer, reply with exactly "{DONT_KNOW}" and nothing else. \
 Never guess, and never use anything you know that isn't in the excerpts."""
+
+
+@dataclass
+class Bot:
+    """The two OpenAI models the bot uses: one embeds the question, one writes the answer."""
+
+    embeddings: Embeddings
+    llm: BaseChatModel
 
 
 @dataclass
@@ -69,8 +85,22 @@ def get_chat_model() -> BaseChatModel:
         max_completion_tokens=MAX_ANSWER_TOKENS,
         api_key=settings.openai_api_key,
         # OpenAI's client waits up to 10 minutes. A customer won't.
-        timeout=30,
+        timeout=OPENAI_TIMEOUT,
+        max_retries=0,
     )
+
+
+def get_bot() -> Bot | None:
+    """The bot, or None when OPENAI_API_KEY isn't set, so each caller decides what then."""
+    if not settings.openai_api_key:
+        return None
+    return Bot(
+        embeddings=get_embeddings(timeout=OPENAI_TIMEOUT, max_retries=0), llm=get_chat_model()
+    )
+
+
+# The tests swap in LangChain's fakes here, so no test pays OpenAI.
+BotDep = Annotated[Bot | None, Depends(get_bot)]
 
 
 def find_chunks(db: Session, question: list[float], count: int = CHUNK_COUNT) -> list[Chunk]:
@@ -105,17 +135,18 @@ def build_prompt(question: str, chunks: list[Chunk]) -> list[BaseMessage]:
     ]
 
 
-def answer_question(
-    db: Session, embeddings: Embeddings, llm: BaseChatModel, question: str
-) -> BotAnswer:
-    """Find the chunks closest to the question, and have the LLM answer from them."""
-    chunks = find_chunks(db, embeddings.embed_query(question))
+def answer_question(db: Session, bot: Bot, question: str) -> BotAnswer:
+    """Find the chunks closest to the question, and have the LLM answer from them.
+
+    Raises OpenAIError if OpenAI fails or takes too long.
+    """
+    chunks = find_chunks(db, bot.embeddings.embed_query(question))
     # End the read's transaction, so none stays open while OpenAI answers.
     db.commit()
     if not chunks:
         # No docs have been uploaded yet, so there's nothing to answer from or pay OpenAI for.
         return BotAnswer(text=DONT_KNOW, sources=[])
-    reply = llm.invoke(build_prompt(question, chunks))
+    reply = bot.llm.invoke(build_prompt(question, chunks))
     text = reply.text.strip()
     if is_dont_know(text):
         # The chunks didn't hold the answer, so naming them as its source would mislead.
