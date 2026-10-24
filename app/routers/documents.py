@@ -21,7 +21,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import SessionDep
 from app.models import Document, DocumentStatus
-from app.queue import EMBED_DOCUMENT, QueueDep
+from app.queue import EMBED_DOCUMENT, EMBED_RETRY, QueueDep
 from app.schemas import DocumentProcessed, DocumentRead, ErrorResponse
 from app.security import CurrentAgent, get_current_agent
 from app.storage import get_s3_client, new_upload_key, save_pdf
@@ -177,7 +177,7 @@ def mark_document_processed(update: DocumentProcessed, db: SessionDep, queue: Qu
     # After the commit, so the worker can't find the row before it says where the text is.
     # If Redis can't be reached, the 503 makes the Lambda try again, and that call queues it.
     try:
-        queue.enqueue(EMBED_DOCUMENT, document.id)
+        queue.enqueue(EMBED_DOCUMENT, document.id, retry=EMBED_RETRY)
     except RedisError as error:
         logger.warning("Couldn't queue document %s for the worker: %s", document.id, error)
         raise HTTPException(status_code=503, detail="Couldn't queue the document. Try again.")

@@ -11,6 +11,7 @@
 !worker/
 !scripts/__init__.py
 !scripts/create_agent.py
+!scripts/failed_jobs.py
 !infra/aws/rds-ca-us-east-2.pem
 
 # Python's caches, inside the folders allowed above.

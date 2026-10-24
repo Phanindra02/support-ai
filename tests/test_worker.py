@@ -1,11 +1,12 @@
 """The worker runs the jobs on the queue in Redis, and keeps each one's result or error."""
 
 from redis import Redis
-from rq import SimpleWorker, Worker
+from rq import Retry, SimpleWorker, Worker
 
+import scripts.failed_jobs
 import worker.main
 from app.config import settings
-from app.queue import queue
+from app.queue import EMBED_RETRY, queue
 
 
 def run_queued_jobs(test_queue):
@@ -45,7 +46,41 @@ def test_the_api_and_the_worker_share_one_queue_on_the_apps_redis():
 
 def test_the_worker_listens_on_that_queue(monkeypatch):
     listened = []
-    monkeypatch.setattr(Worker, "work", lambda self, **options: listened.extend(self.queues))
+    options = {}
+
+    def work(self, **given):
+        listened.extend(self.queues)
+        options.update(given)
+
+    monkeypatch.setattr(Worker, "work", work)
     worker.main.main()
+    # Without the scheduler, a job waiting to be tried again would never run.
+    assert options == {"with_scheduler": True}
     assert [q.name for q in listened] == [queue.name]
     assert listened[0].connection is queue.connection
+
+
+def test_a_job_that_keeps_failing_is_tried_again_then_kept_in_the_failed_list(
+    test_queue, capsys
+):
+    # No waits between tries here, so the burst worker runs them all at once.
+    job = test_queue.enqueue("operator.truediv", 1, 0, retry=Retry(max=2))
+    run_queued_jobs(test_queue)
+
+    job.refresh()
+    assert job.get_status() == "failed"
+    assert job.retries_left == 0  # It was tried 3 times: once, then 2 more.
+
+    scripts.failed_jobs.main([], queue=test_queue)
+    out = capsys.readouterr().out
+    assert f"{job.id} operator.truediv(1, 0) failed: ZeroDivisionError: division by zero" in out
+    assert out.endswith("1 failed jobs\n")
+
+    scripts.failed_jobs.main(["--requeue"], queue=test_queue)
+    assert scripts.failed_jobs.failed_jobs(test_queue) == []
+    assert test_queue.get_job_ids() == [job.id]
+
+
+def test_embedding_jobs_are_tried_3_more_times_with_growing_waits():
+    assert EMBED_RETRY.max == 3
+    assert EMBED_RETRY.intervals == [30, 120, 600]
