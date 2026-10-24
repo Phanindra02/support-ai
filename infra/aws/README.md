@@ -46,13 +46,24 @@ aws s3api get-bucket-encryption --bucket support-ai-docs-phanindra02
 
 ## The image registry (ECR)
 
-CI pushes the API's image to `support-ai-api` in ECR, Amazon's container registry. EC2 pulls it from there with its own IAM role, so the server never needs a registry password.
+CI pushes the API's image to `support-ai-api` in ECR, Amazon's container registry, and the model service's image (Stage 7) to `support-ai-model`. EC2 pulls them from there with its own IAM role, so the server never needs a registry password. Both repositories have the same settings:
 
 - **`sha-` tags can never be overwritten** (`IMMUTABLE_WITH_EXCLUSION`). `sha-<commit>` always names the exact build of that commit, which is what a rollback relies on ([docs/rollback.md](../../docs/rollback.md)). Only `latest` is excluded, so it can move to each new build.
 - **Every push is scanned** for known vulnerabilities in the image's OS packages (basic scanning, which is free). The results are in the ECR console.
 - **`ecr-lifecycle-policy.json`** keeps the 10 newest builds and deletes older ones, plus anything left untagged, so storage doesn't grow forever.
 
-Cost: $0.10 per GB-month of stored images. Builds share most of their layers, so 10 of them come to a few hundred MB, about $0.05 a month. Pulling to EC2 in the same region is free.
+Cost: $0.10 per GB-month of stored images. Builds share most of their layers, so 10 of them come to a few hundred MB, about $0.05 a month for each repository. Pulling to EC2 in the same region is free.
+
+The model service's repository was added in Stage 7, with the same settings:
+
+```bash
+aws ecr create-repository --repository-name support-ai-model --region us-east-2 \
+  --image-tag-mutability IMMUTABLE_WITH_EXCLUSION \
+  --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest \
+  --image-scanning-configuration scanOnPush=true
+aws ecr put-lifecycle-policy --repository-name support-ai-model --region us-east-2 \
+  --lifecycle-policy-text file://infra/aws/ecr-lifecycle-policy.json
+```
 
 ## How CI logs in to AWS (OIDC)
 
@@ -61,7 +72,7 @@ CI has no AWS keys. GitHub gives each workflow run a short-lived signed token (O
 - **`github-ci-trust-policy.json`** says who may use the role: only runs for pushes to `main` of this repo. The token's audience must be `sts.amazonaws.com`, so a token GitHub issued for some other service doesn't work here.
   - The repo was created after July 15, 2026, so GitHub's tokens use immutable subjects, which carry the owner and repo ids: `repo:Phanindra02@60551624/support-ai@1424736820:...`. If the repo were deleted and someone made a new one with the same name, its ids would differ, so its runs couldn't use the role. `gh api repos/Phanindra02/support-ai/actions/oidc/customization/sub` shows the prefix.
   - Branches and pull requests get a different subject, so they can build the image but never push it.
-- **`github-ci-permissions.json`** says what the role may do: log in to ECR, and push to `support-ai-api` only. `GetAuthorizationToken` has to be `"*"`, because AWS doesn't let it be limited to one repository.
+- **`github-ci-permissions.json`** says what the role may do: log in to ECR, and push to `support-ai-api` and `support-ai-model` only. `GetAuthorizationToken` has to be `"*"`, because AWS doesn't let it be limited to one repository.
 
 `ACCOUNT_ID` in both files stands for the AWS account number, filled in when they're applied, so the public repo doesn't show it. The workflow reads the role's ARN from the repo variable `AWS_ROLE_ARN`, for the same reason, and masks the account number in its logs.
 
@@ -198,6 +209,16 @@ docker compose pull
 docker compose up -d --no-build
 docker compose exec api python -m scripts.create_agent --email you@example.com --name "Your Name" --admin
 ```
+
+The model service (Stage 7) runs from CI's image the same way, named by `MODEL_IMAGE`. It added one line to the server's `.env`, and the deploy document moves it to each commit's build after that:
+
+```bash
+# On the server.
+REGISTRY=$(python3 -c "import json; print(*json.load(open('/home/ubuntu/.docker/config.json'))['credHelpers'])")
+echo "MODEL_IMAGE=${REGISTRY}/support-ai-model:latest" >> .env
+```
+
+When it first starts, it downloads the models its settings name from `models/` in the bucket, which the instance role may read (`ReadTheModels`), into the `model-cache` volume. It uses about 270 MB of memory, and the `t4g.small` had about 800 MB available before it started.
 
 `--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty, so the WhatsApp webhook answers 503 and alerts are skipped until they're set. Once the database and the secrets below are set up, the app loads every secret from Parameter Store instead, and the server's `.env` holds none of them.
 
