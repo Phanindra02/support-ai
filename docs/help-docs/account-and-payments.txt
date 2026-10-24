@@ -1,0 +1,25 @@
+Brightleaf Home: Your Account and Payments
+
+Payment methods
+We accept Visa, Mastercard, American Express, Discover, PayPal, Apple Pay, and Brightleaf gift cards. We don't accept cash on delivery or checks.
+
+When you're charged
+Your card is authorized when you place the order, and charged when the order ships. If an order ships in parts, each part is charged when it ships.
+
+Paying in installments
+Orders over $150 can be paid in 4 interest-free installments through Klarna. Choose Klarna at checkout. The first payment is taken at checkout, and the rest every 2 weeks.
+
+Gift cards
+Gift cards come in amounts from $25 to $500 and never expire. You can check a gift card's balance at brightleaf.example/giftcard. A gift card can't be exchanged for cash.
+
+Resetting your password
+Select "Forgot password" on the login page and enter your email address. We send a reset link that works for 30 minutes. If it doesn't arrive, check your spam folder.
+
+Changing your email address
+Go to Account settings, select "Email", and enter the new address. We send a confirmation link to the new address, and the change takes effect once you open it.
+
+Closing your account
+Email support@brightleaf.example from the address on your account and ask us to close it. We delete your personal data within 30 days, except order records, which we must keep for 7 years for tax purposes.
+
+Price adjustments
+If an item you bought drops in price within 14 days of your order, contact us and we refund the difference. This doesn't apply to flash sales.
