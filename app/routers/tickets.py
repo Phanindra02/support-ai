@@ -12,6 +12,7 @@ from app.alerts import get_http_client, send_urgent_alert
 from app.cache import RedisDep, clear_cache, read_cache, write_cache
 from app.database import SessionDep
 from app.models import Customer, Message, MessageSender, Ticket, TicketPriority, TicketStatus
+from app.queue import QueueDep, queue_priority_prediction
 from app.schemas import (
     MAX_INT,
     ErrorResponse,
@@ -119,7 +120,7 @@ def count_tickets(db: Session) -> StatsRead:
 
 
 @router.post("/tickets", response_model=TicketRead, status_code=201)
-def create_ticket(ticket_in: TicketCreate, db: SessionDep, redis: RedisDep):
+def create_ticket(ticket_in: TicketCreate, db: SessionDep, redis: RedisDep, queue: QueueDep):
     customer = get_or_create_customer(db, ticket_in.customer_name, ticket_in.phone)
     ticket = Ticket(customer=customer, subject=ticket_in.subject)
     # The customer's message starts the ticket's conversation.
@@ -130,6 +131,8 @@ def create_ticket(ticket_in: TicketCreate, db: SessionDep, redis: RedisDep):
     # counts again in the moment before the new ticket is saved.
     clear_cache(redis, STATS_KEY)
     db.refresh(ticket)
+    # After the commit too, or the worker could look for the ticket before it's saved.
+    queue_priority_prediction(queue, ticket.id)
     return ticket
 
 

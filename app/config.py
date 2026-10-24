@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     # and one key to guard. Nothing calls OpenAI until it's set.
     openai_api_key: str | None = None
 
+    # The model service (ml/service.py), which the worker asks for each new ticket's priority.
+    # Until it's set, no prediction is queued and new tickets stay at medium.
+    model_service_url: str | None = None
+
     # Where the project's AWS resources are.
     aws_region: str = "us-east-2"
 

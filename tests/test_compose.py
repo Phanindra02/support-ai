@@ -160,6 +160,10 @@ def test_on_ec2_the_app_loads_its_secrets_from_parameter_store(ec2_services):
         assert environment["DATABASE_URL"] == RESET
 
 
+def test_the_api_and_the_worker_ask_the_model_container_for_predictions(api_environment):
+    assert api_environment["MODEL_SERVICE_URL"] == "http://model:8000"
+
+
 def test_the_model_service_gets_none_of_the_apis_settings(services):
     assert "env_file" not in services["model"]
     assert "environment" not in services["model"]
@@ -172,6 +176,9 @@ def test_the_model_service_reads_the_macs_saved_models(services):
 
 def test_on_ec2_the_model_service_stays_off_until_its_image_is_published(ec2_services):
     assert ec2_services["model"]["profiles"]
+    # And nothing asks it for predictions, which would only fail.
+    for name in ["api", "worker"]:
+        assert ec2_services[name]["environment"]["MODEL_SERVICE_URL"] == RESET
 
 
 def test_on_ec2_the_postgres_container_never_starts(ec2_services):

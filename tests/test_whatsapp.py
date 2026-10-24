@@ -647,3 +647,17 @@ def test_a_long_answer_is_cut_to_fit_one_whatsapp_message(client, use_bot, refun
 
     assert len(reply) == MAX_REPLY_LENGTH == 1600
     assert reply.endswith("\u2026")
+
+
+def test_a_ticket_opened_on_whatsapp_queues_one_priority_prediction(
+    client, test_queue, monkeypatch
+):
+    monkeypatch.setattr(settings, "model_service_url", "http://model:8000")
+
+    post_from_twilio(client, whatsapp_form())
+    post_from_twilio(client, whatsapp_form(Body="Any news?"))
+
+    # The second message joins the ticket, which already has its prediction coming.
+    assert [(job.func_name, job.args) for job in test_queue.get_jobs()] == [
+        ("worker.jobs.predict_priority", (1,))
+    ]

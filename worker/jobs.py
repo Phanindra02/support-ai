@@ -2,6 +2,7 @@
 
 import logging
 
+import httpx
 from botocore.client import BaseClient
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -9,11 +10,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.bot import start_new_docs_version
-from app.cache import get_redis
+from app.cache import clear_cache, get_redis
 from app.config import settings
 from app.database import SessionLocal
 from app.embeddings import get_embeddings
-from app.models import Chunk, Document
+from app.models import Chunk, Document, Message, Ticket, TicketPriority
+from app.routers.tickets import STATS_KEY
 from app.storage import get_s3_client, read_text
 
 logger = logging.getLogger(__name__)
@@ -91,3 +93,54 @@ def embed_document(document_id: int) -> int:
         # Most likely a scanned PDF, whose pages are pictures of text.
         logger.warning("Document %s has no text, so the bot can't answer from it", document_id)
     return count
+
+
+# The model service answers in milliseconds. Waiting longer than this means it's down or
+# stuck, and the job should fail so RQ tries again later.
+MODEL_SERVICE_TIMEOUT_SECONDS = 5
+# The longest text the model service takes (ml/service.py).
+MAX_PREDICT_CHARS = 10_000
+
+
+def ticket_text(db: Session, ticket: Ticket) -> str:
+    """The subject, a blank line, then the customer's first message: how the training tickets read."""
+    first = db.scalar(
+        select(Message)
+        .where(Message.ticket_id == ticket.id)
+        .order_by(Message.created_at, Message.id)
+        .limit(1)
+    )
+    body = first.body if first is not None else ""
+    return f"{ticket.subject}\n\n{body}".strip()[:MAX_PREDICT_CHARS]
+
+
+def set_predicted_priority(
+    db: Session, client: httpx.Client, ticket_id: int
+) -> TicketPriority | None:
+    """Ask the model service for the ticket's priority, and save it on the ticket.
+
+    The job runs seconds after the ticket opens, before an agent could have set a priority.
+    Raises if the model service fails, so the ticket keeps its priority and RQ tries again.
+    """
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        logger.warning("Ticket %s doesn't exist, so it has no priority to predict", ticket_id)
+        return None
+    response = client.post(
+        f"{settings.model_service_url}/predict/priority", json={"text": ticket_text(db, ticket)}
+    )
+    response.raise_for_status()
+    ticket.priority = TicketPriority(response.json()["label"])
+    db.commit()
+    return ticket.priority
+
+
+def predict_priority(ticket_id: int) -> str | None:
+    """The job the API queues for each new ticket. Returns the priority it set."""
+    with SessionLocal() as db, httpx.Client(timeout=MODEL_SERVICE_TIMEOUT_SECONDS) as client:
+        priority = set_predicted_priority(db, client, ticket_id)
+    if priority is not None:
+        # The backlog counts by priority just changed.
+        clear_cache(get_redis(), STATS_KEY)
+        logger.info("Ticket %s is %s priority, as the model predicted", ticket_id, priority)
+    return priority
