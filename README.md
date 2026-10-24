@@ -6,17 +6,28 @@ The build plan is in [docs/ROADMAP.md](docs/ROADMAP.md), and each finished stage
 
 ## Run it locally
 
-You need Python 3.14, [uv](https://docs.astral.sh/uv/), PostgreSQL 16, and Redis. On a Mac, install and start them with Homebrew, then create a user and a database for the app:
+You need Python 3.14, [uv](https://docs.astral.sh/uv/), PostgreSQL 16 with pgvector 0.8.2, and Redis. On a Mac, install and start them with Homebrew, then create a user and a database for the app:
 
 ```bash
 brew install postgresql@16
 echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc   # then open a new terminal
 brew services start postgresql@16        # runs in the background, and starts again at login
-createuser --pwprompt support            # asks you for a password
+createuser --pwprompt --superuser support   # asks you for a password
 createdb --owner support support
 createdb --owner support support_test    # the tests' own database, which they empty
 brew install redis
 brew services start redis
+```
+
+`support` is a superuser because only a superuser can turn on pgvector, which loads C code into the database. The migrations do that, and the tests rerun them on an emptied database. The containers' Postgres user is a superuser too, and on RDS the master user has `rds_superuser`. Postgres listens only on the Mac's own address, so nothing else can reach that user. (Made `support` without `--superuser`? `psql -d postgres -c "ALTER ROLE support SUPERUSER"`.)
+
+pgvector is built from its source, because Homebrew's `pgvector` builds only for Postgres 17 and 18. `PG_SYSROOT` points the build at the macOS SDK the Mac has, in case Homebrew built Postgres with a newer one. Run it again after `brew upgrade postgresql@16`, which replaces the folder it installs into:
+
+```bash
+git clone --depth 1 --branch v0.8.2 https://github.com/pgvector/pgvector.git /tmp/pgvector
+make -C /tmp/pgvector install PG_CONFIG=/opt/homebrew/opt/postgresql@16/bin/pg_config \
+  PG_SYSROOT="$(xcrun --show-sdk-path)"
+rm -rf /tmp/pgvector
 ```
 
 Copy `.env.example` to `.env`, and put that password in `DATABASE_URL` and `TEST_DATABASE_URL`. Set `JWT_SECRET_KEY` to the output of `openssl rand -hex 32`. It's empty in the example on purpose, so the app won't start with a key anyone can read on GitHub. The Redis URLs work as they are. Settings are read from `.env`, which git ignores, and a real environment variable with the same name wins over it.

@@ -1,6 +1,9 @@
 """Migrations build the schema the models describe, and every one of them can be undone."""
 
+import re
+
 import pytest
+import yaml
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
@@ -46,6 +49,26 @@ def test_downgrade_removes_every_table_and_type(empty_database, migrate):
     database = inspect(empty_database)
     assert database.get_table_names() == ["alembic_version"]
     assert database.get_enums() == []
+    assert "vector" not in extensions(empty_database)
+
+
+def extensions(engine):
+    """The extensions turned on in a database, with their versions."""
+    with engine.connect() as connection:
+        return dict(connection.execute(text("SELECT extname, extversion FROM pg_extension")).all())
+
+
+def test_upgrade_turns_on_the_pgvector_that_compose_and_rds_have(empty_database, migrate):
+    migrate(empty_database, command.upgrade, "head")
+    # The tests' database is Homebrew's on the Mac and compose's image in CI, so this also
+    # catches a Mac whose pgvector or Postgres drifted from the image (and from RDS's).
+    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
+    image = compose["services"]["postgres"]["image"]
+    [(pgvector, postgres)] = re.findall(r"^pgvector/pgvector:(\d+\.\d+\.\d+)-pg(\d+)$", image)
+    assert extensions(empty_database)["vector"] == pgvector
+    with empty_database.connect() as connection:
+        version_num = connection.execute(text("SHOW server_version_num")).scalar()
+    assert int(version_num) // 10000 == int(postgres)
 
 
 def test_each_migration_can_be_undone_and_redone(empty_database, migrate, scripts):

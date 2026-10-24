@@ -257,8 +257,12 @@ def test_the_database_runs_the_same_postgres_as_compose_and_ci(database):
     ci = yaml.safe_load((PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text())
     assert database["Engine"] == "postgres"
     major = database["EngineVersion"].split(".")[0]
-    assert compose["services"]["postgres"]["image"] == f"postgres:{major}"
-    assert ci["jobs"]["test"]["services"]["postgres"]["image"] == f"postgres:{major}"
+    # pgvector's image is postgres with pgvector added, tagged <pgvector version>-pg<major>.
+    for image in (
+        compose["services"]["postgres"]["image"],
+        ci["jobs"]["test"]["services"]["postgres"]["image"],
+    ):
+        assert re.fullmatch(rf"pgvector/pgvector:\d+\.\d+\.\d+-pg{major}", image)
 
 
 def test_the_database_has_no_public_address(database):

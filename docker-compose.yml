@@ -50,10 +50,10 @@ services:
       postgres:
         condition: service_healthy
 
-  # The same major version as Homebrew's postgresql@16 on the Mac. The tag gets bug and
-  # security fixes (16.x) without a surprise upgrade to 17.
+  # Postgres 16 with pgvector, the same versions as RDS and the Mac: PostgreSQL 16 and
+  # pgvector 0.8.2. The image is the official postgres:16 with pgvector added.
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:0.8.2-pg16
     environment:
       POSTGRES_USER: support
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
