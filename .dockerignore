@@ -8,6 +8,7 @@
 !alembic.ini
 !alembic/
 !app/
+!worker/
 !scripts/__init__.py
 !scripts/create_agent.py
 !infra/aws/rds-ca-us-east-2.pem

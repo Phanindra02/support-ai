@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# The API's image. Build it from the project root, which is the build context:
+# The image for the API, its migrations, and the worker, which docker-compose.yml runs with a
+# different command for each. Build it from the project root, which is the build context:
 #   docker build -f infra/api.Dockerfile -t support-ai-api .
 #
 # Two stages: the first installs the dependencies with uv, and the second copies only the
@@ -45,6 +46,7 @@ COPY --from=builder /app/.venv ./.venv
 COPY --chmod=u=rwX,go=rX alembic.ini ./
 COPY --chmod=u=rwX,go=rX alembic ./alembic
 COPY --chmod=u=rwX,go=rX app ./app
+COPY --chmod=u=rwX,go=rX worker ./worker
 COPY --chmod=u=rwX,go=rX scripts/__init__.py scripts/create_agent.py ./scripts/
 
 # Amazon's root certificates for RDS in us-east-2. The RDS URL asks for sslmode=verify-full,

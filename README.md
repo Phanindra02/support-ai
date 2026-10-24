@@ -38,9 +38,12 @@ uv sync
 uv run alembic upgrade head              # create the tables
 uv run python -m scripts.create_agent --email you@example.com --name "Your Name" --admin   # asks for a password
 uv run uvicorn app.main:app --reload
+uv run python -m worker.main             # the background worker, in a second terminal
 ```
 
 Then open http://127.0.0.1:8000/docs to try the API.
+
+The worker runs the slow jobs the API puts on a queue in Redis, with [RQ](https://python-rq.org/). Each job runs in a forked copy of the worker, so one that crashes can't take the worker down, and a failed job is kept in Redis with its error. `uv run rq info` shows the queue, the workers, and how many jobs failed.
 
 Uploading help docs also needs the AWS CLI, logged in with `aws configure` (see [infra/aws/README.md](infra/aws/README.md)). boto3 reads the keys from `~/.aws`, so they never go in `.env`. Without them, uploads get a 503 and everything else works.
 
@@ -59,7 +62,7 @@ uv run python -m scripts.measure_cache   # time GET /stats with and without the 
 
 ## Run it with Docker
 
-Docker Compose runs the API, Postgres, Redis, and n8n in containers, so Python, Postgres, and Redis don't need to be installed. You need [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+Docker Compose runs the API, its worker, Postgres, Redis, and n8n in containers, so Python, Postgres, and Redis don't need to be installed. You need [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
 Copy `.env.example` to `.env` as above. Compose only needs two values filled in: `JWT_SECRET_KEY` (`openssl rand -hex 32`) and `POSTGRES_PASSWORD` (`openssl rand -hex 24`). It points the API at the containers' own Postgres, Redis, and n8n, whatever `.env` says.
 
@@ -71,9 +74,9 @@ docker compose exec api python -m scripts.create_agent --email you@example.com -
 Then open http://localhost:8000/docs for the API, and http://localhost:5678 for n8n ([set up the workflow](infra/n8n/README.md)).
 
 - **Settings reach the containers as environment variables.** `.env` is never copied into the image, because `.dockerignore` leaves it out, so the same image can run anywhere with different settings. `.env.example` lists every setting, with the secrets left empty.
-- **Migrations run by themselves.** The `migrate` container runs `alembic upgrade head` and exits, and the API waits until it has finished. After pulling new code, `docker compose up --build -d` rebuilds the image and applies any new migrations.
+- **Migrations run by themselves.** The `migrate` container runs `alembic upgrade head` and exits, and the API and the worker wait until it has finished. After pulling new code, `docker compose up --build -d` rebuilds the image and applies any new migrations.
 - **Only the API and n8n are reachable from the Mac,** and only at `127.0.0.1`. Postgres and Redis have no published ports, so they can't clash with the ones from Homebrew. For a database shell: `docker compose exec postgres psql -U support`.
-- **Data lives in volumes.** The `postgres-data` and `n8n-data` volumes survive `docker compose down`. `docker compose down -v` deletes them.
+- **Data lives in volumes.** The `postgres-data`, `redis-data`, and `n8n-data` volumes survive `docker compose down`. `docker compose down -v` deletes them. Redis keeps the job queue, so it saves every write to its volume (append-only), and queued jobs survive a restart.
 - **Ports 8000 and 5678 are also the ones `uvicorn` and `npx n8n` use,** so stop those first.
 - **Uploads get a 503 in compose on the Mac,** because the container has no AWS credentials, and `~/.aws` isn't shared with it on purpose. On EC2, later in Stage 5, the instance's IAM role gives the container its own. That needs the instance's metadata hop limit set to 2: a container on compose's network is one hop further from the metadata service than the instance itself, and at the default of 1 it gets no credentials.
 - **WhatsApp works the same way.** Run `ngrok http 8000` as before. The API trusts ngrok's forwarded headers only from the Docker network's gateway, `172.28.0.1`. That's where ngrok's connections arrive, and no client can choose that address. `docker-compose.yml` explains why that matters.
@@ -408,10 +411,11 @@ Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer c
 
 ## Project layout
 
-- `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, `storage.py` the S3 uploads, and `config.py` the settings.
+- `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, `storage.py` the S3 uploads, `queue.py` the job queue, and `config.py` the settings.
+- `worker/`: the background worker, which runs the jobs on the queue (`main.py`).
 - `alembic/`: database migrations.
 - `docker-compose.yml`: the whole stack in containers. It sits at the root so `docker compose` finds it, and the `.env` beside it, without flags.
-- `infra/`: the API's Dockerfile (`api.Dockerfile`), the exported [n8n workflow](infra/n8n/README.md), the [rules that protect main](infra/github/README.md), and the [AWS setup](infra/aws/README.md).
+- `infra/`: the Dockerfile for the API and the worker (`api.Dockerfile`), the exported [n8n workflow](infra/n8n/README.md), the [rules that protect main](infra/github/README.md), and the [AWS setup](infra/aws/README.md).
 - `.github/workflows/ci.yml`: the CI workflow.
 - `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
 - `tests/`: pytest tests.
