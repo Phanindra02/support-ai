@@ -4,11 +4,14 @@ OpenAI is replaced by fakes (the use_bot fixture): embeddings that point every q
 same way, and LangChain's fake chat model, which replies with the text a test gives it.
 """
 
+import hashlib
+
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.bot import (
     ANSWER_CACHE_SECONDS,
+    BOT_VERSION,
     CHAT_MODEL,
     CHUNK_COUNT,
     DOCS_VERSION_KEY,
@@ -294,3 +297,14 @@ def test_with_redis_down_a_new_docs_version_is_skipped_not_a_crash(caplog):
 )
 def test_these_questions_clean_up_the_same(question):
     assert clean_question(question) == "how long does a refund take"
+
+
+def test_a_change_to_how_the_bot_answers_changes_every_cache_key(redis_client):
+    # After the deploy that changed the instructions, WhatsApp still got an answer cached
+    # before it, with the old sources. The key now holds the bot's settings too.
+    key = answer_cache_key(redis_client, QUESTION)
+    assert key.startswith(f"answer:{BOT_VERSION}:0:")
+    assert (
+        BOT_VERSION
+        == hashlib.sha256(f"{CHAT_MODEL}|{CHUNK_COUNT}|{INSTRUCTIONS}".encode()).hexdigest()[:12]
+    )
