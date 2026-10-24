@@ -15,6 +15,7 @@ from botocore.validate import ParamValidator
 from sqlalchemy import make_url
 
 from app.config import PROJECT_ROOT, Settings
+from app.schemas import TEXT_KEY_PATTERN
 from app.storage import UPLOAD_PREFIX
 
 AWS = PROJECT_ROOT / "infra" / "aws"
@@ -161,9 +162,19 @@ def test_the_server_can_only_add_uploads_to_the_bucket(server_permissions):
     assert save["Resource"] == f"arn:aws:s3:::{BUCKET}/{UPLOAD_PREFIX}*"
 
 
+def test_the_worker_can_only_read_the_text_the_lambda_saved(server_permissions):
+    # Reading, under text/ only: not the uploaded PDFs, and no way to change anything.
+    read = server_permissions["ReadDocumentText"]
+    assert read["Action"] == "s3:GetObject"
+    assert read["Resource"] == f"arn:aws:s3:::{BUCKET}/text/*"
+    # The prefix of every text key the API accepts from the Lambda, and so the worker reads.
+    assert TEXT_KEY_PATTERN.startswith("^text/")
+
+
 def test_the_server_can_pull_the_api_image_but_never_push(server_permissions):
     assert set(server_permissions) == {
         "SaveUploadedDocs",
+        "ReadDocumentText",
         "LogInToEcr",
         "PullTheApiImage",
         "LoadTheAppSecrets",
@@ -257,8 +268,12 @@ def test_the_database_runs_the_same_postgres_as_compose_and_ci(database):
     ci = yaml.safe_load((PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text())
     assert database["Engine"] == "postgres"
     major = database["EngineVersion"].split(".")[0]
-    assert compose["services"]["postgres"]["image"] == f"postgres:{major}"
-    assert ci["jobs"]["test"]["services"]["postgres"]["image"] == f"postgres:{major}"
+    # pgvector's image is postgres with pgvector added, tagged <pgvector version>-pg<major>.
+    for image in (
+        compose["services"]["postgres"]["image"],
+        ci["jobs"]["test"]["services"]["postgres"]["image"],
+    ):
+        assert re.fullmatch(rf"pgvector/pgvector:\d+\.\d+\.\d+-pg{major}", image)
 
 
 def test_the_database_has_no_public_address(database):

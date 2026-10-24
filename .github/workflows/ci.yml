@@ -30,8 +30,8 @@ jobs:
     # waits until both pass their health checks.
     services:
       postgres:
-        # The same major version as on the Mac and in docker-compose.yml.
-        image: postgres:16
+        # The same Postgres and pgvector as docker-compose.yml, the Mac, and RDS.
+        image: pgvector/pgvector:0.8.2-pg16
         env:
           # A throwaway database that only exists for this run, so the password isn't a secret.
           POSTGRES_USER: support

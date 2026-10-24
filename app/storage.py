@@ -46,3 +46,8 @@ def save_pdf(client: BaseClient, bucket: str, key: str, file: BinaryIO) -> None:
     """Upload a PDF to S3. Raises botocore's errors if S3 can't be reached or refuses it."""
     # upload_fileobj sends a big file in parts, several at a time, and retries a failed part.
     client.upload_fileobj(file, bucket, key, ExtraArgs={"ContentType": "application/pdf"})
+
+
+def read_text(client: BaseClient, bucket: str, key: str) -> str:
+    """A UTF-8 text file from S3, such as the text the Lambda pulled out of a PDF."""
+    return client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")

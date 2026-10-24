@@ -1,6 +1,7 @@
 """POST /webhooks/document-processed: the Lambda marks a document processed once its text is saved.
 
-The Lambda itself is tested in test_extract_text.py, including a run through this endpoint.
+That queues the worker's job for the document. The Lambda itself is tested in
+test_extract_text.py, including a run through this endpoint, and the job in test_jobs.py.
 """
 
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models import Document, DocumentStatus
+from app.queue import EMBED_DOCUMENT, get_queue, make_queue
 from app.schemas import TEXT_KEY_PATTERN, UPLOAD_KEY_PATTERN, DocumentProcessed
 from app.storage import new_upload_key
 
@@ -47,7 +49,14 @@ def stored(session_factory, document_id):
         return db.get(Document, document_id)
 
 
-def test_the_lambda_marks_a_document_processed(anonymous_client, secret, document, session_factory):
+def queued(test_queue):
+    """The jobs waiting on the queue, as (function, arguments) pairs."""
+    return [(job.func_name, job.args) for job in test_queue.get_jobs()]
+
+
+def test_the_lambda_marks_a_document_processed(
+    anonymous_client, secret, document, session_factory, test_queue
+):
     response = send(anonymous_client)
 
     assert response.status_code == 200, response.text
@@ -59,21 +68,44 @@ def test_the_lambda_marks_a_document_processed(anonymous_client, secret, documen
     saved = stored(session_factory, document)
     assert saved.status == DocumentStatus.processed
     assert saved.text_s3_key == TEXT_KEY
+    # The worker splits and embeds the text, so the Lambda isn't kept waiting.
+    assert queued(test_queue) == [(EMBED_DOCUMENT, (document,))]
 
 
-def test_marking_it_again_changes_nothing(anonymous_client, secret, document, session_factory):
-    # Lambda retries, and S3 can send the same event twice, so a repeat must be harmless.
+def test_marking_it_again_changes_the_row_no_further_but_queues_the_job_again(
+    anonymous_client, secret, document, session_factory, test_queue
+):
+    # Lambda retries, and S3 can send the same event twice, so a repeat must be harmless. The
+    # job replaces the document's chunks, so running it twice leaves one copy of each.
     first = send(anonymous_client)
     second = send(anonymous_client)
     assert second.status_code == 200
     assert second.json() == first.json()
     assert stored(session_factory, document).text_s3_key == TEXT_KEY
+    assert queued(test_queue) == [(EMBED_DOCUMENT, (document,))] * 2
 
 
-def test_an_unknown_upload_is_a_404(anonymous_client, secret):
+def test_if_the_queue_cant_be_reached_the_lambdas_retry_queues_the_job(
+    anonymous_client, test_app, secret, document, session_factory, test_queue
+):
+    # Nothing listens on port 1.
+    test_app.dependency_overrides[get_queue] = lambda: make_queue("redis://localhost:1/0")
+    response = send(anonymous_client)
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Couldn't queue the document. Try again."}
+    # The row was saved first. The Lambda raises on the 503, so Lambda runs it again.
+    assert stored(session_factory, document).status == DocumentStatus.processed
+
+    test_app.dependency_overrides[get_queue] = lambda: test_queue
+    assert send(anonymous_client).status_code == 200
+    assert queued(test_queue) == [(EMBED_DOCUMENT, (document,))]
+
+
+def test_an_unknown_upload_is_a_404(anonymous_client, secret, test_queue):
     response = send(anonymous_client)
     assert response.status_code == 404
     assert response.json() == {"detail": "No document has that s3_key"}
+    assert queued(test_queue) == []
 
 
 @pytest.mark.parametrize(
@@ -84,12 +116,13 @@ def test_an_unknown_upload_is_a_404(anonymous_client, secret):
     ids=["missing", "empty", "wrong", "too-short", "too-long", "wrong-case", "non-ascii"],
 )
 def test_anything_but_the_secret_is_a_403(
-    anonymous_client, secret, document, session_factory, given
+    anonymous_client, secret, document, session_factory, test_queue, given
 ):
     response = send(anonymous_client, secret=given)
     assert response.status_code == 403
     assert response.json() == {"detail": "Wrong or missing X-Webhook-Secret"}
     assert stored(session_factory, document).status == DocumentStatus.uploaded
+    assert queued(test_queue) == []
 
 
 def test_a_header_that_isnt_text_is_a_403_not_a_500(anonymous_client, secret):
@@ -143,10 +176,11 @@ def test_nothing_is_accepted_until_the_secret_is_set(anonymous_client, monkeypat
         "not-an-object",
     ],
 )
-def test_bad_input_is_a_422(anonymous_client, secret, document, session_factory, body):
+def test_bad_input_is_a_422(anonymous_client, secret, document, session_factory, test_queue, body):
     response = send(anonymous_client, body=body)
     assert response.status_code == 422, response.text
     assert stored(session_factory, document).status == DocumentStatus.uploaded
+    assert queued(test_queue) == []
 
 
 def test_the_keys_the_api_makes_are_accepted():

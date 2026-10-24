@@ -22,6 +22,12 @@ services:
     # RDS is always up, so there's no container to wait for.
     depends_on: !reset {}
 
+  # The worker needs the same secrets as the API: the database's URL and the OpenAI key.
+  worker:
+    environment:
+      PARAMETER_STORE_PATH: /support-ai
+      DATABASE_URL: !reset null
+
   # A service with a profile only starts when that profile is asked for, so `docker compose up`
   # leaves Postgres out on the server.
   postgres:

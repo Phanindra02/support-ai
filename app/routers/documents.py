@@ -2,7 +2,8 @@
 
 POST /documents saves the PDF to S3 and records it as "uploaded". S3 then runs the Lambda in
 lambda/, which pulls out the text, saves it to S3 too, and calls
-POST /webhooks/document-processed to mark the document "processed".
+POST /webhooks/document-processed to mark the document "processed". That queues a job for the
+worker, which splits the text into chunks and embeds them.
 """
 
 import hmac
@@ -14,11 +15,13 @@ from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
 from fastapi.exceptions import RequestValidationError
+from redis import RedisError
 from sqlalchemy import select
 
 from app.config import settings
 from app.database import SessionDep
 from app.models import Document, DocumentStatus
+from app.queue import EMBED_DOCUMENT, QueueDep
 from app.schemas import DocumentProcessed, DocumentRead, ErrorResponse
 from app.security import CurrentAgent, get_current_agent
 from app.storage import get_s3_client, new_upload_key, save_pdf
@@ -146,13 +149,21 @@ webhook_router = APIRouter(
 @webhook_router.post(
     "/document-processed",
     response_model=DocumentRead,
-    responses={404: {"model": ErrorResponse, "description": "No document has that s3_key"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "No document has that s3_key"},
+        503: {
+            "model": ErrorResponse,
+            "description": "LAMBDA_WEBHOOK_SECRET isn't set, or the job queue can't be reached",
+        },
+    },
 )
-def mark_document_processed(update: DocumentProcessed, db: SessionDep):
-    """The Lambda calls this once it has saved a PDF's text to S3.
+def mark_document_processed(update: DocumentProcessed, db: SessionDep, queue: QueueDep):
+    """The Lambda calls this once it has saved a PDF's text to S3. It queues the job that
+    splits the text into chunks and embeds them for the bot.
 
-    Calling it again for the same document changes nothing more, so the Lambda can safely
-    retry, and S3 can deliver the same upload's event twice.
+    The Lambda can safely call it again for the same document, and S3 can deliver the same
+    upload's event twice. Each call queues the job again, and the job replaces the document's
+    chunks, so the bot ends up with one copy of each.
     """
     document = db.scalar(select(Document).where(Document.s3_key == update.s3_key))
     if document is None:
@@ -163,5 +174,12 @@ def mark_document_processed(update: DocumentProcessed, db: SessionDep):
     document.text_s3_key = update.text_s3_key
     db.commit()
     db.refresh(document)
-    logger.info("Document %s is processed", document.id)
+    # After the commit, so the worker can't find the row before it says where the text is.
+    # If Redis can't be reached, the 503 makes the Lambda try again, and that call queues it.
+    try:
+        queue.enqueue(EMBED_DOCUMENT, document.id)
+    except RedisError as error:
+        logger.warning("Couldn't queue document %s for the worker: %s", document.id, error)
+        raise HTTPException(status_code=503, detail="Couldn't queue the document. Try again.")
+    logger.info("Document %s is processed, and queued for the worker", document.id)
     return document

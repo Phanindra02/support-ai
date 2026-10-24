@@ -1,4 +1,5 @@
-# The whole stack in containers: the API, Postgres, Redis, and n8n. From the project root:
+# The whole stack in containers: the API, its worker, Postgres, Redis, and n8n. From the project
+# root:
 #   docker compose up --build -d
 #
 # Compose reads .env from this folder, both for the ${...} values below and for the API's
@@ -6,8 +7,8 @@
 
 name: support-ai
 
-# The API and its migrations run from the same image with the same settings. This block is
-# written once here, and the two services below copy it with "<<: *api".
+# The API, its migrations, and the worker run from the same image with the same settings. This
+# block is written once here, and the three services below copy it with "<<: *api".
 x-api: &api
   build:
     context: .
@@ -50,10 +51,25 @@ services:
       postgres:
         condition: service_healthy
 
-  # The same major version as Homebrew's postgresql@16 on the Mac. The tag gets bug and
-  # security fixes (16.x) without a surprise upgrade to 17.
+  # Runs the slow jobs the API puts on the queue in Redis, such as embedding a help doc's text
+  # (worker/main.py). The API's image and settings, with another command.
+  worker:
+    <<: *api
+    command: ["python", "-m", "worker.main"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    # On a stop, RQ finishes the job it's running before it exits. Docker's default 10 seconds
+    # could cut a long job off halfway.
+    stop_grace_period: 1m
+    restart: unless-stopped
+
+  # Postgres 16 with pgvector, the same versions as RDS and the Mac: PostgreSQL 16 and
+  # pgvector 0.8.2. The image is the official postgres:16 with pgvector added.
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:0.8.2-pg16
     environment:
       POSTGRES_USER: support
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -70,9 +86,15 @@ services:
       retries: 15
     restart: unless-stopped
 
-  # Holds only the cache and the rate limit's counters, which are fine to lose, so no volume.
+  # Holds the cache, the rate limit's counters, and the job queue. The first two are fine to
+  # lose, but a lost job would leave a document the bot can never answer from. So Redis logs
+  # every write to a file on a volume (appendonly), and reads it back when it starts again.
+  # It fsyncs that file every second, so a crash loses a second of writes at most.
   redis:
     image: redis:8
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -94,6 +116,7 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:
   n8n-data:
 
 # A fixed address range, so the gateway that FORWARDED_ALLOW_IPS trusts is always 172.28.0.1.

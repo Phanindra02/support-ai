@@ -1,7 +1,18 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, func, true
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -168,3 +179,34 @@ class Document(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+# How many numbers OpenAI's text-embedding-3-small returns for each piece of text. A different
+# embedding model can return a different number, which takes a migration and embedding every
+# chunk again: embeddings from two models can't be compared with each other.
+EMBEDDING_DIMENSIONS = 1536
+
+
+class Chunk(Base):
+    """A piece of a help doc's text and its embedding, which the bot searches for answers."""
+
+    __tablename__ = "chunks"
+    # Each place in a document holds one chunk, so if the worker runs twice on the same
+    # document, the second run can't save a second copy of every chunk.
+    __table_args__ = (UniqueConstraint("document_id", "position"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # CASCADE, so deleting a document deletes its chunks too. The unique constraint above
+    # starts with document_id, so it also serves as the index for finding a document's chunks.
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    # Where the chunk comes in its document, from 0.
+    position: Mapped[int]
+    text: Mapped[str] = mapped_column(Text)
+    # The meaning of the text as 1,536 numbers. Texts that mean similar things get embeddings
+    # that are close together, so the closest chunks to a question's embedding answer it best.
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    document: Mapped[Document] = relationship()

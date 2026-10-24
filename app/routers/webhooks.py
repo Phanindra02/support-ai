@@ -3,26 +3,41 @@
 Twilio POSTs each incoming WhatsApp message to POST /webhooks/twilio as a form. The response
 is TwiML, an XML format Twilio reads, and any message in it is sent back to the customer.
 
+The bot (app/bot.py) gets each message first, and answers it from the help docs if it can.
+When it can't, the message opens a ticket for the team, as it did before there was a bot.
+
 This router skips the per-IP rate limit. Every customer's message arrives from Twilio's
 servers, so a limit per IP would hold back all customers together. The signature check
 below means only Twilio can call it.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import Response
+from openai import OpenAIError
+from redis import Redis
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 
+from app.bot import Bot, BotAnswer, BotDep, answer_with_cache
 from app.cache import RedisDep, clear_cache
 from app.config import settings
 from app.database import SessionDep
 from app.models import Customer, Message, MessageSender, Ticket, TicketStatus
 from app.routers.tickets import STATS_KEY, get_or_create_customer
 from app.schemas import ErrorResponse, WhatsAppMessage
+
+logger = logging.getLogger(__name__)
+
+# The most text Twilio sends in one WhatsApp message. A longer reply would fail to send.
+MAX_REPLY_LENGTH = 1600
+
+# Tickets a human is working on. A customer with one is talking to the team, not the bot.
+ACTIVE_STATUSES = (TicketStatus.open, TicketStatus.pending)
 
 # A new ticket's subject is the first line of the customer's message, cut to this length.
 SUBJECT_LENGTH = 80
@@ -98,11 +113,51 @@ def find_open_ticket(db: Session, customer: Customer) -> Ticket | None:
         select(Ticket)
         .where(
             Ticket.customer_id == customer.id,
-            Ticket.status.in_([TicketStatus.open, TicketStatus.pending]),
+            Ticket.status.in_(ACTIVE_STATUSES),
         )
         .order_by(Ticket.created_at.desc(), Ticket.id.desc())
         .limit(1)
     )
+
+
+def has_active_ticket(db: Session, phone: str) -> bool:
+    """Whether the customer with this number has a ticket the team is working on."""
+    ticket_id = db.scalar(
+        select(Ticket.id)
+        .join(Ticket.customer)
+        .where(Customer.phone == phone, Ticket.status.in_(ACTIVE_STATUSES))
+        .limit(1)
+    )
+    return ticket_id is not None
+
+
+def ask_bot(
+    db: Session, redis: Redis, bot: Bot | None, message: WhatsAppMessage
+) -> BotAnswer | None:
+    """The bot's answer to the message, or None when the team should take it instead.
+
+    The team takes it when the bot isn't set up, the message has no text, the customer is
+    already talking to the team, OpenAI fails, or the help docs don't hold the answer.
+    """
+    question = message.body.strip()
+    if bot is None or not question or has_active_ticket(db, message.phone):
+        return None
+    try:
+        answer = answer_with_cache(db, redis, bot, question)
+    except OpenAIError:
+        # The customer still gets a reply, from a person rather than the bot.
+        logger.exception("The bot couldn't reach OpenAI, so the message goes to the team")
+        return None
+    return answer if answer.known else None
+
+
+def bot_reply(answer: BotAnswer) -> str:
+    """The bot's answer, then the help docs it came from, cut to fit one WhatsApp message."""
+    label = "Source" if len(answer.sources) == 1 else "Sources"
+    text = f"{answer.text}\n\n{label}: {', '.join(answer.sources)}"
+    if len(text) > MAX_REPLY_LENGTH:
+        return text[: MAX_REPLY_LENGTH - 1] + "\u2026"
+    return text
 
 
 def opened_its_ticket(db: Session, message: Message) -> bool:
@@ -169,22 +224,29 @@ def add_to_ticket(db: Session, message: WhatsAppMessage) -> tuple[Ticket, bool]:
     responses={200: {"content": {"application/xml": {}}, "description": "TwiML for Twilio"}},
 )
 def receive_whatsapp_message(
-    message: Annotated[WhatsAppMessage, Form()], db: SessionDep, redis: RedisDep
+    message: Annotated[WhatsAppMessage, Form()], db: SessionDep, redis: RedisDep, bot: BotDep
 ):
     """Twilio calls this for each WhatsApp message a customer sends.
 
-    The customer is found by phone number, or added. The message joins their open ticket, or
-    opens a new one if they have none. A new ticket gets a confirmation reply, which Twilio
-    sends to the customer on WhatsApp.
+    The bot answers first, with the help docs it answered from, if it can. Otherwise the
+    customer is found by phone number, or added. The message joins their open ticket, or
+    opens a new one if they have none. A new ticket gets a confirmation reply saying someone
+    will follow up, which Twilio sends to the customer on WhatsApp.
 
     A message Twilio delivers again isn't stored again. It gets the same reply as the first
     delivery, because Twilio only repeats a delivery when it didn't use the first reply.
     """
+    reply = MessagingResponse()
+    answer = ask_bot(db, redis, bot, message)
+    if answer is not None:
+        # Nothing is stored: a question the bot answered needs no one from the team.
+        reply.message(bot_reply(answer))
+        return twiml(reply)
+
     ticket, is_new = add_to_ticket(db, message)
     db.commit()
     clear_cache(redis, STATS_KEY)  # A ticket may have opened, or gone from pending to open.
 
-    reply = MessagingResponse()
     # Only when a ticket opens. Someone who sends five short messages in a row shouldn't get
     # five confirmations, and later messages join a ticket they already know about. An empty
     # <Response/> tells Twilio there's nothing to send.

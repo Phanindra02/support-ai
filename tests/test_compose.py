@@ -44,11 +44,11 @@ def api_environment(services):
 
 
 def test_one_command_starts_the_whole_stack(services):
-    assert {"api", "migrate", "postgres", "redis", "n8n"} <= services.keys()
+    assert {"api", "migrate", "worker", "postgres", "redis", "n8n"} <= services.keys()
 
 
-def test_the_api_and_its_migrations_build_the_same_image(services):
-    for name in ["api", "migrate"]:
+def test_the_api_its_migrations_and_the_worker_build_the_same_image(services):
+    for name in ["api", "migrate", "worker"]:
         assert services[name]["build"]["dockerfile"] == "infra/api.Dockerfile"
         # support-ai-api unless API_IMAGE names another, like CI's image in ECR on EC2.
         assert services[name]["image"] == "${API_IMAGE:-support-ai-api}"
@@ -60,6 +60,17 @@ def test_the_api_waits_for_the_migrations_to_finish(services):
     waits_for = services["api"]["depends_on"]
     assert waits_for["migrate"]["condition"] == "service_completed_successfully"
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+def test_the_worker_runs_once_the_tables_and_redis_are_ready(services):
+    worker = services["worker"]
+    assert worker["command"] == ["python", "-m", "worker.main"]
+    assert worker["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
+    assert worker["depends_on"]["redis"]["condition"] == "service_healthy"
+    assert worker["restart"] == "unless-stopped"
+    # RQ finishes its job on a stop, and Docker kills a container that's still busy after
+    # stop_grace_period, 10 seconds unless it's set.
+    assert worker["stop_grace_period"] == "1m"
 
 
 def test_the_api_talks_to_the_other_containers(services, api_environment):
@@ -102,6 +113,9 @@ def test_n8n_is_pinned_to_an_exact_version(services):
 
 def test_data_survives_replacing_a_container(services):
     assert "postgres-data:/var/lib/postgresql/data" in services["postgres"]["volumes"]
+    # The job queue is in Redis. Its append-only file goes in /data, the image's data folder.
+    assert "redis-data:/data" in services["redis"]["volumes"]
+    assert services["redis"]["command"] == ["redis-server", "--appendonly", "yes"]
     assert "n8n-data:/home/node/.n8n" in services["n8n"]["volumes"]
 
 
@@ -134,11 +148,11 @@ def ec2_services(ec2_compose):
 
 
 def test_on_ec2_the_database_changes_and_caddy_is_added(ec2_services):
-    assert set(ec2_services) == {"api", "migrate", "postgres", "caddy"}
+    assert set(ec2_services) == {"api", "migrate", "worker", "postgres", "caddy"}
 
 
-def test_on_ec2_the_api_and_its_migrations_load_their_secrets_from_parameter_store(ec2_services):
-    for name in ["api", "migrate"]:
+def test_on_ec2_the_app_loads_its_secrets_from_parameter_store(ec2_services):
+    for name in ["api", "migrate", "worker"]:
         environment = ec2_services[name]["environment"]
         assert environment["PARAMETER_STORE_PATH"] == "/support-ai"
         # An environment variable would win over Parameter Store, so the container's URL from
