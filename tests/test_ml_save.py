@@ -49,7 +49,7 @@ def test_upload_puts_the_files_under_models_by_name_and_version(tmp_path, s3):
     (folder / "model.joblib").write_bytes(b"model bytes")
     (folder / "metadata.json").write_text("{}")
 
-    keys = upload(s3, BUCKET, folder, tmp_path)
+    keys = upload(s3, BUCKET, {"name": "priority", "version": 3}, folder)
 
     assert keys == ["models/priority/v3/metadata.json", "models/priority/v3/model.joblib"]
     body = s3.get_object(Bucket=BUCKET, Key="models/priority/v3/model.joblib")["Body"].read()

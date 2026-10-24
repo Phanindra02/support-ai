@@ -13,6 +13,11 @@
 !scripts/create_agent.py
 !scripts/failed_jobs.py
 !infra/aws/rds-ca-us-east-2.pem
+# The model service's code (infra/model.Dockerfile). Not ml/data/ or ml/models/.
+!ml/__init__.py
+!ml/registry.py
+!ml/service.py
+!ml/text.py
 
 # Python's caches, inside the folders allowed above.
 **/__pycache__

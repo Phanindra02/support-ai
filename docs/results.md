@@ -307,3 +307,11 @@ Measured on 2026-10-24 with `uv run python -m ml.save --upload`, which trains bo
 | sentiment | v1 | 0.743 | 1.1 MB |
 
 - Each model is trained on its training set only, so the test score in its `metadata.json` belongs to that exact file.
+
+## Model service image (Stage 7)
+
+Measured on 2026-10-24 with `docker image ls support-ai-model` after `docker compose build model` on the Mac, and `du -sm` inside the image.
+
+- The image is 659 MB. Its virtual environment is 335 MB: SciPy 149 MB (with its bundled libraries), NumPy 68 MB, scikit-learn 57 MB, and botocore 31 MB. scikit-learn needs SciPy and NumPy, so most of the size comes with the models' one library.
+- It installs only the `service` dependency group, without the API's packages, and copies only four files from `ml/`.
+- Started with `docker compose up -d model`, it was healthy within a few seconds and answered `/predict/priority` from inside the container.

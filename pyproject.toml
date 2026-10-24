@@ -48,11 +48,21 @@ ml = [
     "scikit-learn>=1.9.1",
     "xgboost>=3.4.1",
 ]
+# All the model service's image installs (infra/model.Dockerfile), with uv sync --only-group
+# service: none of the API's dependencies. The same locked scikit-learn as the ml group, which
+# the saved models need.
+service = [
+    "boto3>=1.43.118",
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "scikit-learn>=1.9.1",
+    "uvicorn>=0.54.0",
+]
 
 [tool.uv]
 # uv sync installs every group, so the tests can import the Lambda and the training code. The API's image installs
 # neither (infra/api.Dockerfile).
-default-groups = ["dev", "lambda", "ml"]
+default-groups = ["dev", "lambda", "ml", "service"]
 
 [tool.pytest.ini_options]
 # The project isn't installed as a package, so this lets tests import app from the project root,
