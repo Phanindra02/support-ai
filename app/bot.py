@@ -9,6 +9,7 @@ refund policy, and saying "I don't know" lets a human take over instead.
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -61,8 +62,15 @@ INSTRUCTIONS = f"""\
 You are a customer support assistant. Answer the customer's question using only the help doc \
 excerpts you are given. Keep the answer short and friendly, in plain text.
 
+When you answer, end with a last line that says "Excerpts used:" and the numbers of the \
+excerpts the answer came from, such as "Excerpts used: 1, 3".
+
 If the excerpts don't contain the answer, reply with exactly "{DONT_KNOW}" and nothing else. \
 Never guess, and never use anything you know that isn't in the excerpts."""
+
+# The line the instructions ask the LLM to end with, which is cut from the reply.
+# Anything may follow it: on the first real run, an "I don't know." ended "Excerpts used: None".
+EXCERPTS_USED = re.compile(r"\s*Excerpts used:([^\n]*)$", re.IGNORECASE)
 
 
 @dataclass
@@ -161,16 +169,28 @@ def answer_question(db: Session, bot: Bot, question: str) -> BotAnswer:
     chunks = find_chunks(db, bot.embeddings.embed_query(question))
     # End the read's transaction, so none stays open while OpenAI answers.
     db.commit()
+    return answer_from_chunks(bot.llm, question, chunks)
+
+
+def answer_from_chunks(llm: BaseChatModel, question: str, chunks: list[Chunk]) -> BotAnswer:
+    """Have the LLM answer from these chunks, closest first. scripts/measure_bot.py uses it too."""
     if not chunks:
         # No docs have been uploaded yet, so there's nothing to answer from or pay OpenAI for.
         return BotAnswer(text=DONT_KNOW, sources=[])
-    reply = bot.llm.invoke(build_prompt(question, chunks))
+    reply = llm.invoke(build_prompt(question, chunks))
     text = reply.text.strip()
+    # Only the chunks the LLM says it used are sources. Without that line, all of them are.
+    used = chunks
+    match = EXCERPTS_USED.search(text)
+    if match:
+        text = text[: match.start()].strip()
+        numbers = [int(n) for n in re.findall(r"[0-9]+", match.group(1))]
+        used = [chunks[n - 1] for n in numbers if 1 <= n <= len(chunks)] or chunks
     if is_dont_know(text):
         # The chunks didn't hold the answer, so naming them as its source would mislead.
         return BotAnswer(text=DONT_KNOW, sources=[])
     # Each doc once, closest first. dict keeps the order things were added in.
-    sources = list(dict.fromkeys(chunk.document.filename for chunk in chunks))
+    sources = list(dict.fromkeys(chunk.document.filename for chunk in used))
     return BotAnswer(text=text, sources=sources)
 
 
