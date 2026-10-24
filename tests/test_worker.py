@@ -1,18 +1,11 @@
 """The worker runs the jobs on the queue in Redis, and keeps each one's result or error."""
 
-import pytest
 from redis import Redis
 from rq import SimpleWorker, Worker
 
 import worker.main
 from app.config import settings
-from app.queue import make_queue, queue
-
-
-@pytest.fixture
-def test_queue(test_redis_url, redis_client):
-    """A queue on the tests' Redis database, which redis_client empties before and after."""
-    return make_queue(test_redis_url)
+from app.queue import queue
 
 
 def run_queued_jobs(test_queue):

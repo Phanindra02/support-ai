@@ -18,6 +18,7 @@ from app.config import PROJECT_ROOT, settings
 from app.database import Base, get_db, make_engine
 from app.main import app
 from app.models import Agent, AgentRole
+from app.queue import get_queue, make_queue
 from app.security import create_access_token, hash_password
 from app.storage import get_s3_client
 
@@ -74,6 +75,12 @@ def redis_client(test_redis_url):
     yield client
     client.flushdb()
     client.close()
+
+
+@pytest.fixture
+def test_queue(test_redis_url, redis_client):
+    """The job queue, on the tests' Redis database, which redis_client empties before and after."""
+    return make_queue(test_redis_url)
 
 
 @pytest.fixture(scope="session")
@@ -161,7 +168,7 @@ def test_bucket():
 
 
 @pytest.fixture
-def test_app(session_factory, redis_client, n8n, test_bucket, monkeypatch):
+def test_app(session_factory, redis_client, test_queue, n8n, test_bucket, monkeypatch):
     """The app, using the test database, Redis, and fakes for n8n and S3 instead of its own."""
 
     def get_test_db():
@@ -170,6 +177,7 @@ def test_app(session_factory, redis_client, n8n, test_bucket, monkeypatch):
 
     app.dependency_overrides[get_db] = get_test_db
     app.dependency_overrides[get_redis] = lambda: redis_client
+    app.dependency_overrides[get_queue] = lambda: test_queue
     fake_n8n_client = httpx.Client(transport=httpx.MockTransport(n8n.handle))
     app.dependency_overrides[get_http_client] = lambda: fake_n8n_client
     # Made only when a request asks for it, since most tests never touch S3.

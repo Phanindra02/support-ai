@@ -358,6 +358,8 @@ curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.
 
 Only the Lambda calls this, after saving a PDF's text to S3. It sends the shared secret in `X-Webhook-Secret`, and the two keys: the upload's, which finds the document, and where the text is. [infra/aws/README.md](infra/aws/README.md#pulling-the-text-out-of-uploads-lambda) explains the Lambda.
 
+It marks the document `processed`, then queues a job for the worker, which reads the text from S3 and splits it into chunks of about 1,000 characters (`worker/jobs.py`). The Lambda doesn't wait for that.
+
 ```bash
 curl -H "X-Webhook-Secret: $LAMBDA_WEBHOOK_SECRET" -H "Content-Type: application/json" \
   -d '{"s3_key": "uploads/7020...001c.pdf", "text_s3_key": "text/7020...001c.txt"}' \
@@ -367,7 +369,8 @@ curl -H "X-Webhook-Secret: $LAMBDA_WEBHOOK_SECRET" -H "Content-Type: application
 - **A wrong or missing secret gets a 403,** checked before the body is read, and the check takes as long however much of the secret is right. Until `LAMBDA_WEBHOOK_SECRET` is set, every call gets a 503.
 - **The keys must look like the ones the API and the Lambda make** (`uploads/` or `text/`, 32 hex digits, `.pdf` or `.txt`), or it's a 422.
 - **A 404 means no document has that key.** Usually the PDF reached S3, which started the Lambda, just before `POST /documents` saved the row. The Lambda fails, and Lambda runs it again a minute later.
-- **Calling it twice is harmless.** Lambda retries, and S3 can deliver the same event twice, so marking a processed document again changes nothing.
+- **Calling it twice is harmless.** Lambda retries, and S3 can deliver the same event twice. Marking a processed document again changes nothing, and the job it queues again replaces the document's chunks, so the bot keeps one copy of each.
+- **If Redis can't be reached, it's a 503.** The row is already saved, and the Lambda fails on the 503, so Lambda runs it again, and that call queues the job.
 - **It isn't rate limited per IP.** Like Twilio's, every call comes from the same cloud's addresses, and the secret is checked first.
 
 ### Status codes

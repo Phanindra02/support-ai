@@ -4,10 +4,17 @@ RQ keeps each job in Redis: the function to run, its arguments, and afterwards i
 its error. Work that calls OpenAI or reads S3 goes here, so no request waits for it.
 """
 
+from typing import Annotated
+
+from fastapi import Depends
 from redis import Redis
 from rq import Queue
 
 from app.config import settings
+
+# The job that splits a processed document into chunks and embeds them (worker/jobs.py). It's
+# queued by its import path, so the API never imports the worker's code, or LangChain.
+EMBED_DOCUMENT = "worker.jobs.embed_document"
 
 
 def make_queue(url: str) -> Queue:
@@ -19,3 +26,11 @@ def make_queue(url: str) -> Queue:
 
 
 queue = make_queue(settings.redis_url)
+
+
+def get_queue() -> Queue:
+    """The queue, as a FastAPI dependency, so tests can swap in one on their own Redis."""
+    return queue
+
+
+QueueDep = Annotated[Queue, Depends(get_queue)]

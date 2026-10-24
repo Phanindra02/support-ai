@@ -11,6 +11,12 @@
       "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/uploads/*"
     },
     {
+      "Sid": "ReadDocumentText",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/text/*"
+    },
+    {
       "Sid": "LogInToEcr",
       "Effect": "Allow",
       "Action": "ecr:GetAuthorizationToken",
