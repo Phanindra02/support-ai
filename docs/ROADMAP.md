@@ -175,7 +175,7 @@ Done when: a model service sets each new ticket's priority, flags angry customer
 - [x] Train XGBoost on the TF-IDF features plus simple extras like message length. Macro F1 0.568, below the baseline's 0.594, and 12 times slower to train.
 - [x] Tune a few settings with cross-validation, give rare priority levels extra weight, and compare against the baseline. `ml/tune.py`: Logistic Regression with C=30 wins, at test macro F1 0.709 against the baseline's 0.594. Weighting lifted XGBoost's low recall from 0.253 to 0.578, but it still trails.
 - [x] Train a sentiment model the same way on labeled customer messages, such as Kaggle's airline tweet sentiment dataset. **[You]** Download it. Downloaded with the tickets. Weighted Logistic Regression with C=1 wins, at test macro F1 0.743, and it's right 88.8% of the times it says negative.
-- [ ] Save both models with joblib, give each a version number, and store them in S3.
+- [x] Save both models with joblib, give each a version number, and store them in S3. `ml/save.py` writes `model.joblib` and `metadata.json` (settings, test scores, git commit, and scikit-learn version) to `models/<name>/v1/` in the help docs bucket. A saved version is never changed; a new model gets a new number.
 - [ ] Build a separate FastAPI model service with `/predict/priority` and `/predict/sentiment`, and containerize it.
 - [ ] When a new ticket arrives, have the worker call the model service and set the priority.
 - [ ] Trigger the n8n alert if priority is high or sentiment is very negative.
