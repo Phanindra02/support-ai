@@ -143,7 +143,7 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 - [ ] **[You]** Get an OpenAI API key. Use it for both chat and embeddings, so there's one provider.
 - [ ] **[You]** Store the key in Parameter Store, and in `.env` for local work.
 - [ ] Turn on pgvector with `CREATE EXTENSION vector;` on RDS. Locally, switch the compose Postgres image to `pgvector/pgvector`.
-- [ ] Add a chunks table with document id, chunk text, and embedding.
+- [x] Add a chunks table with document id, chunk text, and embedding. Each chunk also has its `position` in the document, unique per document, so a second run of the worker can't save every chunk twice. Embeddings are `vector(1536)`, the size of OpenAI's `text-embedding-3-small`.
 - [ ] Add a background worker using RQ, on the Redis the project already uses.
 - [ ] When a doc is marked processed, have the API queue a job for it.
 - [ ] In the worker, load the text from S3 and split it with LangChain's text splitter (start at about 1,000 characters with some overlap).
