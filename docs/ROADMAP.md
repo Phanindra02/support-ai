@@ -160,9 +160,9 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 
 ### System design
 
-- [ ] Learn message queues and background jobs: retries, at-least-once delivery, and dead-letter queues.
-- [ ] Learn how LLM apps control latency and cost: caching, batching embeddings, and limiting context size.
-- [ ] Apply it: give worker jobs a retry limit, and keep failed jobs in a separate list that can be inspected.
+- [x] Learn message queues and background jobs: retries, at-least-once delivery, and dead-letter queues. `docs/system-design/12-message-queues.md`.
+- [x] Learn how LLM apps control latency and cost: caching, batching embeddings, and limiting context size. `docs/system-design/13-llm-latency-and-cost.md`.
+- [x] Apply it: give worker jobs a retry limit, and keep failed jobs in a separate list that can be inspected. 3 more tries after 30 s, 2 min, and 10 min, then RQ's failed job registry, which `scripts/failed_jobs.py` lists and can requeue.
 
 ## Stage 7: Machine learning
 
