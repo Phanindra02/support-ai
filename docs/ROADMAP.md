@@ -173,7 +173,7 @@ Done when: a model service sets each new ticket's priority, flags angry customer
 - [x] Clean the text and split it into training and test sets, keeping the class balance the same in both. `ml/prepare.py` lowercases, drops links, @handles, and repeats, then holds back a stratified 20% with a fixed seed.
 - [x] Build a baseline with TF-IDF and Logistic Regression, and record precision, recall, and F1 for each priority level. `ml/train.py`: accuracy 0.638 and macro F1 0.594, with low priority caught only 31% of the time.
 - [x] Train XGBoost on the TF-IDF features plus simple extras like message length. Macro F1 0.568, below the baseline's 0.594, and 12 times slower to train.
-- [ ] Tune a few settings with cross-validation, give rare priority levels extra weight, and compare against the baseline.
+- [x] Tune a few settings with cross-validation, give rare priority levels extra weight, and compare against the baseline. `ml/tune.py`: Logistic Regression with C=30 wins, at test macro F1 0.709 against the baseline's 0.594. Weighting lifted XGBoost's low recall from 0.253 to 0.578, but it still trails.
 - [ ] Train a sentiment model the same way on labeled customer messages, such as Kaggle's airline tweet sentiment dataset. **[You]** Download it.
 - [ ] Save both models with joblib, give each a version number, and store them in S3.
 - [ ] Build a separate FastAPI model service with `/predict/priority` and `/predict/sentiment`, and containerize it.

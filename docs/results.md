@@ -240,3 +240,32 @@ Measured on 2026-10-24 with `uv run python -m ml.train tickets xgboost`, which t
 
 - XGBoost scores below the baseline on every F1, and low-priority recall drops further, to 0.253. TF-IDF gives tens of thousands of sparse columns, each a word that's in few tickets. A linear model weighs all of them at once, while each tree splits on only a few, so on text this is a common result.
 - The extras don't rescue it: the exploration found the median ticket is 60 words at every priority, so length carries little signal.
+
+### Tuned with cross-validation, with and without class weights
+
+Measured on 2026-10-24 with `uv run python -m ml.tune tickets`, which took 5 minutes 24 seconds, nearly all of it XGBoost. Each setting is scored by 3-fold stratified cross-validation on the training tickets, by macro F1. The best setting is then refit on all 13,070 training tickets and scored once on the test tickets. "Weighted" gives each ticket a sample weight so every priority counts the same in total: a low ticket weighs about 1.9 times as much as a medium one.
+
+| Model | Weighted | Best setting | Cross-validation macro F1 | Test macro F1 | Test low recall |
+|---|---|---|---|---|---|
+| Logistic Regression | no | C=30 | **0.641** | **0.709** | 0.599 |
+| Logistic Regression | yes | C=30 | 0.639 | 0.706 | **0.640** |
+| XGBoost | no | depth 6 | 0.532 | 0.568 | 0.253 |
+| XGBoost | yes | depth 6 | 0.568 | 0.615 | 0.578 |
+| Baseline (from above) | no | C=1 | | 0.594 | 0.313 |
+
+Logistic Regression tried C of 0.3, 1, 3, 10, 30, and 100. XGBoost tried depths 3 and 6. A first run that stopped at C=10 picked 10, the edge of the grid, so the grid was widened until the best value sat inside it.
+
+The chosen model is the cross-validation winner: unweighted Logistic Regression with C=30. On the test tickets:
+
+| | Precision | Recall | F1 | Tickets |
+|---|---|---|---|---|
+| high | 0.735 | 0.756 | 0.745 | 1,269 |
+| medium | 0.700 | 0.747 | 0.723 | 1,324 |
+| low | 0.732 | 0.599 | 0.659 | 675 |
+| Accuracy | | | 0.720 | 3,268 |
+| Macro average | 0.723 | 0.700 | 0.709 | |
+
+- Tuning C did most of the work: macro F1 rose from 0.594 to 0.709 and low recall from 0.313 to 0.599. The default C=1 held the weights too small for this many word features.
+- Once C is tuned, weights add little to Logistic Regression: low recall rises to 0.640, but the other labels lose about as much. The cross-validation scores differ by 0.002, which is noise, so the plain model stays.
+- Weights help XGBoost much more (low recall 0.253 to 0.578), but it still trails Logistic Regression by about 0.09 macro F1 and trains 100 times slower.
+- Every test score is about 0.07 above its cross-validation score. Each cross-validation model learns from two thirds of the training tickets (about 8,700), while the final one learns from all 13,070, so the model is still getting better with more data.
