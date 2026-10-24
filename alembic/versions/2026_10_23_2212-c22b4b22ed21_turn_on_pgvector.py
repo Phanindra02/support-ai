@@ -22,9 +22,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # IF NOT EXISTS, so a database where someone already turned it on by hand still upgrades.
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    # No IF NOT EXISTS: that would quietly keep a pgvector someone installed by hand, at
+    # whatever version it is. This way the migration owns the extension, and the downgrade
+    # drops only what it made. A database that already has it fails here, loudly.
+    op.execute("CREATE EXTENSION vector")
 
 
 def downgrade() -> None:
-    op.execute("DROP EXTENSION IF EXISTS vector")
+    op.execute("DROP EXTENSION vector")
