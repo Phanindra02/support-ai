@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     # request away.
     lambda_webhook_secret: str | None = None
 
+    # OpenAI, for both the embeddings and the bot's answers, so there's one provider to pay
+    # and one key to guard. Nothing calls OpenAI until it's set.
+    openai_api_key: str | None = None
+
     # Where the project's AWS resources are.
     aws_region: str = "us-east-2"
 

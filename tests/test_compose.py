@@ -114,6 +114,7 @@ def test_no_secret_is_written_in_the_file(services, api_environment):
         "TWILIO_AUTH_TOKEN",
         "N8N_WEBHOOK_SECRET",
         "LAMBDA_WEBHOOK_SECRET",
+        "OPENAI_API_KEY",
     }
     assert not secret_settings & api_environment.keys()
     assert services["api"]["env_file"] == ".env"
