@@ -166,3 +166,32 @@ Measured on 2026-10-24 with `uv run python -m scripts.measure_bot`, against the 
 The first run, before a fix, scored 24/25 on answers and sources. The bot replied to the Chicago question with "I don't know." and then "Excerpts used: None", which the bot didn't strip, so it counted as an answer. On WhatsApp, that customer would have been sent "I don't know" instead of getting a ticket. The fix accepts anything after "Excerpts used:".
 
 Every setting scores perfectly, so this test set can't tell them apart: three short docs give only 9 to 23 chunks, and each question's answer is in one place. The settings stay at 1,000 characters and 4 chunks, which leaves room for answers that span two places in the docs. Telling them apart needs longer docs and questions whose answers span sections.
+
+## The Stage 7 datasets
+
+Measured on 2026-10-24 with `uv run python -m ml.explore`.
+
+**Tickets:** Tobias Bueck's "Multilingual Customer Support Tickets" on Kaggle, file `aa_dataset-tickets-multi-lang-5-2-50-version.csv`, English rows only. The text is the subject, a blank line, then the body.
+
+| | Rows | Share |
+|---|---|---|
+| medium | 6,618 | 40.5% |
+| high | 6,346 | 38.8% |
+| low | 3,374 | 20.7% |
+| All | 16,338 | |
+
+- No ticket is missing its body or priority, and no text appears twice. 3,838 rows in the whole file (both languages) have no subject, so their text is the body alone.
+- Median 60 words, 95% at most 96, longest 172. The median is 60 words for every priority, so length alone can't tell them apart.
+- Low is the rare class, about a fifth of the rows, so it gets extra weight in training (step 6).
+
+**Tweets:** CrowdFlower's "Twitter US Airline Sentiment" on Kaggle, `Tweets.csv`.
+
+| | Rows | Share |
+|---|---|---|
+| negative | 9,178 | 62.7% |
+| neutral | 3,099 | 21.2% |
+| positive | 2,363 | 16.1% |
+| All | 14,640 | |
+
+- No tweet is missing its text or label, but 213 texts appear more than once, mostly retweets. They're dropped before the split, so no tweet is in both the training and test sets.
+- Median 19 words, longest 36. Negative tweets run longer (median 21 words) than neutral or positive ones (14).

@@ -168,8 +168,8 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 
 Done when: a model service sets each new ticket's priority, flags angry customers, and triggers the Slack alert.
 
-- [ ] **[You]** Download a support-ticket dataset with priority labels from Kaggle. Suggest a dataset and the exact download steps first.
-- [ ] Explore it in Pandas: class balance, text length, and missing values.
+- [x] **[You]** Download a support-ticket dataset with priority labels from Kaggle. Suggest a dataset and the exact download steps first. Tobias Bueck's "Multilingual Customer Support Tickets", English rows only, in the git-ignored `ml/data/`.
+- [x] Explore it in Pandas: class balance, text length, and missing values. `ml/explore.py`, with the numbers in `docs/results.md`.
 - [ ] Clean the text and split it into training and test sets, keeping the class balance the same in both.
 - [ ] Build a baseline with TF-IDF and Logistic Regression, and record precision, recall, and F1 for each priority level.
 - [ ] Train XGBoost on the TF-IDF features plus simple extras like message length.
