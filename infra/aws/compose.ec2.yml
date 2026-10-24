@@ -33,6 +33,11 @@ services:
   postgres:
     profiles: [local-postgres]
 
+  # Off on the server until CI publishes its image to ECR and the server's role may read
+  # models/ in S3. Until then, the deploy's pull would look for an image only the Mac has.
+  model:
+    profiles: [model-service]
+
   # Answers on ports 80 and 443 for the domain, with a certificate it gets and renews by
   # itself, and passes each request on to the API (infra/aws/Caddyfile).
   caddy:

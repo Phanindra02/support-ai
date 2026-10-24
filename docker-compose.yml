@@ -1,5 +1,5 @@
-# The whole stack in containers: the API, its worker, Postgres, Redis, and n8n. From the project
-# root:
+# The whole stack in containers: the API, its worker, the model service, Postgres, Redis, and
+# n8n. From the project root:
 #   docker compose up --build -d
 #
 # Compose reads .env from this folder, both for the ${...} values below and for the API's
@@ -64,6 +64,25 @@ services:
     # On a stop, RQ finishes the job it's running before it exits. Docker's default 10 seconds
     # could cut a long job off halfway.
     stop_grace_period: 1m
+    restart: unless-stopped
+
+  # Predicts priority and sentiment for the worker (ml/service.py). Its own image, and no
+  # env_file, so none of the API's secrets reach it. Not published: only containers call it,
+  # at http://model:8000.
+  model:
+    build:
+      context: .
+      dockerfile: infra/model.Dockerfile
+    image: support-ai-model
+    # The models ml.save wrote on the Mac, so the container needs no AWS login to start.
+    # Without them, it would download them from S3_BUCKET.
+    volumes:
+      - ./ml/models:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   # Postgres 16 with pgvector, the same versions as RDS and the Mac: PostgreSQL 16 and

@@ -21,13 +21,11 @@ import sklearn
 from botocore.client import BaseClient
 from sklearn.pipeline import Pipeline
 
-from app.config import PROJECT_ROOT, settings
+from app.config import settings
 from ml.prepare import clean, split
+from ml.registry import MODELS_DIR, PROJECT_ROOT, model_folder, s3_key
 from ml.train import DATASETS, MODELS, evaluate
 from ml.tune import fit_params
-
-MODELS_DIR = PROJECT_ROOT / "ml" / "models"
-S3_PREFIX = "models/"
 
 
 @dataclass(frozen=True)
@@ -93,18 +91,18 @@ def metadata(name: str, chosen: Chosen, train: pd.DataFrame, report: dict) -> di
 
 def save(model: Pipeline, info: dict, models_dir: Path = MODELS_DIR) -> Path:
     """Write model.joblib and metadata.json to a folder for this name and version."""
-    folder = models_dir / info["name"] / f"v{info['version']}"
+    folder = model_folder(models_dir, info["name"], info["version"])
     folder.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, folder / "model.joblib")
     (folder / "metadata.json").write_text(json.dumps(info, indent=2) + "\n")
     return folder
 
 
-def upload(s3: BaseClient, bucket: str, folder: Path, models_dir: Path = MODELS_DIR) -> list[str]:
-    """Copy the folder's files to the same path under models/ in the bucket."""
+def upload(s3: BaseClient, bucket: str, info: dict, folder: Path) -> list[str]:
+    """Copy the folder's files to the model's name and version under models/ in the bucket."""
     keys = []
     for path in sorted(folder.iterdir()):
-        key = S3_PREFIX + path.relative_to(models_dir).as_posix()
+        key = s3_key(info["name"], info["version"], path.name)
         s3.upload_file(str(path), bucket, key)
         keys.append(key)
     return keys
@@ -122,7 +120,7 @@ def main(argv: list[str]) -> None:
         if "--upload" in argv:
             from app.storage import get_s3_client
 
-            for key in upload(get_s3_client(), settings.s3_bucket, folder):
+            for key in upload(get_s3_client(), settings.s3_bucket, info, folder):
                 print(f"  uploaded s3://{settings.s3_bucket}/{key}")
 
 

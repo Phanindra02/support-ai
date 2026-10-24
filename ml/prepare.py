@@ -6,31 +6,15 @@ rather than saving the sets to files.
 uv run python -m ml.prepare
 """
 
-import html
-import re
-
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from ml.datasets import load_tickets, load_tweets
+from ml.text import clean_text
 
 # A fifth of each dataset is held back for testing, never seen in training or tuning.
 TEST_SIZE = 0.2
 SEED = 42
-
-URL = re.compile(r"https?://\S+")
-# Tweets start with the airline's handle. Left in, a model could learn which airline people
-# complain about instead of the words that show a mood.
-HANDLE = re.compile(r"@\w+")
-SPACES = re.compile(r"\s+")
-
-
-def clean_text(text: str) -> str:
-    """Lowercase text without links, @handles, HTML escapes like &amp;, or runs of spaces."""
-    text = html.unescape(text)
-    text = URL.sub(" ", text)
-    text = HANDLE.sub(" ", text)
-    return SPACES.sub(" ", text).strip().lower()
 
 
 def clean(data: pd.DataFrame) -> pd.DataFrame:

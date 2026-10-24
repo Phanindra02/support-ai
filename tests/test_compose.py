@@ -44,7 +44,7 @@ def api_environment(services):
 
 
 def test_one_command_starts_the_whole_stack(services):
-    assert {"api", "migrate", "worker", "postgres", "redis", "n8n"} <= services.keys()
+    assert {"api", "migrate", "worker", "model", "postgres", "redis", "n8n"} <= services.keys()
 
 
 def test_the_api_its_migrations_and_the_worker_build_the_same_image(services):
@@ -148,7 +148,7 @@ def ec2_services(ec2_compose):
 
 
 def test_on_ec2_the_database_changes_and_caddy_is_added(ec2_services):
-    assert set(ec2_services) == {"api", "migrate", "worker", "postgres", "caddy"}
+    assert set(ec2_services) == {"api", "migrate", "worker", "postgres", "model", "caddy"}
 
 
 def test_on_ec2_the_app_loads_its_secrets_from_parameter_store(ec2_services):
@@ -158,6 +158,20 @@ def test_on_ec2_the_app_loads_its_secrets_from_parameter_store(ec2_services):
         # An environment variable would win over Parameter Store, so the container's URL from
         # docker-compose.yml is dropped, not replaced.
         assert environment["DATABASE_URL"] == RESET
+
+
+def test_the_model_service_gets_none_of_the_apis_settings(services):
+    assert "env_file" not in services["model"]
+    assert "environment" not in services["model"]
+
+
+def test_the_model_service_reads_the_macs_saved_models(services):
+    assert services["model"]["volumes"] == ["./ml/models:/models:ro"]
+    assert "healthcheck" in services["model"]
+
+
+def test_on_ec2_the_model_service_stays_off_until_its_image_is_published(ec2_services):
+    assert ec2_services["model"]["profiles"]
 
 
 def test_on_ec2_the_postgres_container_never_starts(ec2_services):

@@ -2281,7 +2281,7 @@ wheels = [
 name = "support-ai"
 version = "0.1.0"
 source = { virtual = "." }
-default-groups = ["dev", "lambda", "ml"]
+default-groups = ["dev", "lambda", "ml", "service"]
 dependencies = [
     { name = "alembic" },
     { name = "boto3" },
@@ -2319,6 +2319,13 @@ ml = [
     { name = "scikit-learn" },
     { name = "xgboost" },
 ]
+service = [
+    { name = "boto3" },
+    { name = "fastapi" },
+    { name = "pydantic-settings" },
+    { name = "scikit-learn" },
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2355,6 +2362,13 @@ lambda = [{ name = "pypdf", specifier = ">=6.21.2" }]
 ml = [
     { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "xgboost", specifier = ">=3.4.1" },
+]
+service = [
+    { name = "boto3", specifier = ">=1.43.118" },
+    { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "pydantic-settings", specifier = ">=2.15.0" },
+    { name = "scikit-learn", specifier = ">=1.9.1" },
+    { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
 [[package]]

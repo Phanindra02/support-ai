@@ -12,6 +12,7 @@ import pytest
 from app.config import PROJECT_ROOT
 
 DOCKERFILE = PROJECT_ROOT / "infra" / "api.Dockerfile"
+MODEL_DOCKERFILE = PROJECT_ROOT / "infra" / "model.Dockerfile"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 
 
@@ -93,3 +94,33 @@ def test_the_image_has_the_rds_certificates_where_the_driver_looks(dockerfile):
     assert (
         f"ENV PGSSLROOTCERT={workdir}/{destination.removeprefix('./')}{Path(source).name}" in final
     )
+
+
+@pytest.fixture(scope="module")
+def model_dockerfile():
+    return instructions(MODEL_DOCKERFILE)
+
+
+def test_the_model_image_copies_only_files_that_reach_the_build(model_dockerfile, dockerignore):
+    test_everything_the_image_copies_reaches_the_build(model_dockerfile, dockerignore)
+
+
+def test_the_model_image_installs_only_the_service_group(model_dockerfile):
+    [sync] = [line for line in model_dockerfile if "uv sync" in line]
+    assert "--locked" in sync.split()
+    assert "--only-group service" in sync
+
+
+def test_the_model_image_runs_as_a_user_other_than_root(model_dockerfile):
+    test_the_image_runs_as_a_user_other_than_root(model_dockerfile)
+
+
+def test_the_model_image_holds_every_project_module_the_service_imports(model_dockerfile):
+    # Each ml module the image copies may import only ml modules it also copies.
+    [copy] = [line for line in model_dockerfile if line.startswith("COPY") and "ml/" in line]
+    copied = {Path(word).stem for word in copy.split() if word.startswith("ml/")}
+    for module in copied:
+        source = (PROJECT_ROOT / "ml" / f"{module}.py").read_text()
+        imported = set(re.findall(r"^from ml\.(\w+) import", source, re.MULTILINE))
+        assert imported <= copied, f"ml/{module}.py imports {imported - copied}"
+        assert not re.search(r"^(from|import) (app|pandas)\b", source, re.MULTILINE)
