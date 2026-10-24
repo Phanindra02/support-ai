@@ -1,17 +1,27 @@
-"""The worker's job: read a processed document's text from S3 and split it into chunks."""
+"""The worker's job: split a processed document's text into chunks, embed them, and save them."""
 
 import itertools
 
 import pytest
 from botocore.exceptions import ClientError
+from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
 from rq import SimpleWorker
 from rq.utils import import_attribute
+from sqlalchemy import select
 
 import worker.jobs
 from app.config import settings
-from app.models import Document, DocumentStatus
+from app.embeddings import EMBEDDING_MODEL, get_embeddings
+from app.models import EMBEDDING_DIMENSIONS, Chunk, Document, DocumentStatus
 from app.queue import EMBED_DOCUMENT
-from worker.jobs import CHUNK_OVERLAP, CHUNK_SIZE, chunk_document, embed_document, split_text
+from worker.jobs import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    chunk_document,
+    embed_document,
+    save_chunks,
+    split_text,
+)
 
 PDF_KEY = "uploads/" + "a" * 32 + ".pdf"
 TEXT_KEY = "text/" + "a" * 32 + ".txt"
@@ -25,6 +35,20 @@ TEXT = "\n\n".join(
         "Café orders can't be returned once they've been opened. " * 4,
     ]
 )
+
+
+# Gives each text the same made-up embedding every time, without calling OpenAI.
+fake_embeddings = DeterministicFakeEmbedding(size=EMBEDDING_DIMENSIONS)
+
+
+class OpenAIIsDown(Embeddings):
+    """Embeddings that fail, the way OpenAI's do when it can't be reached."""
+
+    def embed_documents(self, texts):
+        raise ConnectionError("Couldn't reach OpenAI")
+
+    def embed_query(self, text):
+        raise ConnectionError("Couldn't reach OpenAI")
 
 
 def shared(before, after):
@@ -117,12 +141,98 @@ def test_without_a_bucket_the_job_fails_with_a_clear_error(
         chunk_document(db, s3, processed_document)
 
 
+def saved_chunks(session_factory, document_id):
+    """A document's chunks, in order, as (position, text, embedding)."""
+    with session_factory() as db:
+        chunks = db.scalars(
+            select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.position)
+        )
+        return [(chunk.position, chunk.text, chunk.embedding) for chunk in chunks]
+
+
+def embedded(texts):
+    """What the fake embeddings save for these texts. pgvector keeps 4-byte floats."""
+    vectors = fake_embeddings.embed_documents(texts)
+    return [
+        (n, text, pytest.approx(v, abs=1e-6)) for n, (text, v) in enumerate(zip(texts, vectors))
+    ]
+
+
+def run_job(session_factory, s3, document_id, embeddings=fake_embeddings):
+    with session_factory() as db:
+        return save_chunks(db, s3, embeddings, document_id)
+
+
+def test_each_chunk_is_saved_in_order_with_its_embedding(
+    s3, test_bucket, session_factory, processed_document
+):
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=TEXT.encode())
+    texts = split_text(TEXT)
+    assert run_job(session_factory, s3, processed_document) == len(texts)
+    assert saved_chunks(session_factory, processed_document) == embedded(texts)
+
+
+def test_running_the_job_twice_leaves_one_copy_of_each_chunk(
+    s3, test_bucket, session_factory, processed_document
+):
+    # Queues deliver a job at least once, so it can run twice for the same document.
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=TEXT.encode())
+    run_job(session_factory, s3, processed_document)
+    run_job(session_factory, s3, processed_document)
+    assert saved_chunks(session_factory, processed_document) == embedded(split_text(TEXT))
+
+
+def test_new_text_replaces_the_old_chunks(s3, test_bucket, session_factory, processed_document):
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=TEXT.encode())
+    run_job(session_factory, s3, processed_document)
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=b"Refunds take 5 days.")
+    assert run_job(session_factory, s3, processed_document) == 1
+    assert saved_chunks(session_factory, processed_document) == embedded(["Refunds take 5 days."])
+
+
+def test_if_openai_fails_the_document_keeps_its_chunks(
+    s3, test_bucket, session_factory, processed_document
+):
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=TEXT.encode())
+    run_job(session_factory, s3, processed_document)
+    with pytest.raises(ConnectionError):
+        run_job(session_factory, s3, processed_document, embeddings=OpenAIIsDown())
+    assert saved_chunks(session_factory, processed_document) == embedded(split_text(TEXT))
+
+
+def test_a_document_with_no_text_ends_up_with_no_chunks(
+    s3, test_bucket, session_factory, processed_document
+):
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=TEXT.encode())
+    run_job(session_factory, s3, processed_document)
+    s3.put_object(Bucket=test_bucket, Key=TEXT_KEY, Body=b"")
+    # Nothing to embed, so OpenAI isn't called, and it being down doesn't matter.
+    assert run_job(session_factory, s3, processed_document, embeddings=OpenAIIsDown()) == 0
+    assert saved_chunks(session_factory, processed_document) == []
+
+
+def test_embeddings_are_made_by_the_model_the_column_is_sized_for(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "sk-made-up-for-the-tests")
+    embeddings = get_embeddings()
+    assert embeddings.model == EMBEDDING_MODEL == "text-embedding-3-small"
+    assert embeddings.dimensions == EMBEDDING_DIMENSIONS == 1536
+    assert embeddings.openai_api_key.get_secret_value() == "sk-made-up-for-the-tests"
+    assert embeddings.request_timeout == 30
+
+
+def test_without_a_key_nothing_is_embedded():
+    # conftest.py empties the key for every test, so no test can call the real OpenAI.
+    assert settings.openai_api_key is None
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY is empty"):
+        get_embeddings()
+
+
 def test_the_api_queues_the_worker_s_real_job():
     # The API queues the job by its import path, so a typo would only show when a job ran.
     assert import_attribute(EMBED_DOCUMENT) is embed_document
 
 
-def test_a_processed_upload_reaches_the_worker_and_is_split(
+def test_a_processed_upload_ends_up_as_chunks_with_embeddings(
     anonymous_client, s3, test_bucket, test_queue, session_factory, make_agent, monkeypatch
 ):
     # The whole path: the Lambda's call queues the job, and the worker runs it.
@@ -141,10 +251,14 @@ def test_a_processed_upload_reaches_the_worker_and_is_split(
     )
     assert response.status_code == 200, response.text
 
-    # The job opens its own session and S3 client. Here they're the tests' ones.
+    # The job makes its own session, S3 client, and embeddings. Here they're the tests' ones.
     monkeypatch.setattr(worker.jobs, "SessionLocal", session_factory)
     monkeypatch.setattr(worker.jobs, "get_s3_client", lambda: s3)
+    monkeypatch.setattr(worker.jobs, "get_embeddings", lambda: fake_embeddings)
     [job] = test_queue.get_jobs()
     SimpleWorker([test_queue], connection=test_queue.connection).work(burst=True)
     assert job.get_status() == "finished", job.latest_result().exc_string
     assert job.return_value() == len(split_text(TEXT))
+    with session_factory() as db:
+        [document_id] = db.scalars(select(Document.id))
+    assert saved_chunks(session_factory, document_id) == embedded(split_text(TEXT))

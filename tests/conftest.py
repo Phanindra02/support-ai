@@ -161,6 +161,13 @@ def unreachable_s3():
     )
 
 
+@pytest.fixture(autouse=True)
+def no_openai_key(monkeypatch):
+    """Empty the OpenAI key for every test, so none can call the real OpenAI and spend money,
+    even with a real key in .env. Tests that need embeddings pass in LangChain's fake ones."""
+    monkeypatch.setattr(settings, "openai_api_key", None)
+
+
 @pytest.fixture(scope="session")
 def test_bucket():
     """The bucket the app uploads to in the tests, in the fake S3 the s3 fixture starts."""

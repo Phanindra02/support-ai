@@ -3,12 +3,15 @@
 import logging
 
 from botocore.client import BaseClient
+from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Document
+from app.embeddings import get_embeddings
+from app.models import Chunk, Document
 from app.storage import get_s3_client, read_text
 
 logger = logging.getLogger(__name__)
@@ -45,13 +48,42 @@ def chunk_document(db: Session, s3: BaseClient, document_id: int) -> list[str]:
     return split_text(text)
 
 
+def save_chunks(db: Session, s3: BaseClient, embeddings: Embeddings, document_id: int) -> int:
+    """Split a processed document's text, embed each chunk, and replace its chunks with these.
+
+    Replacing, rather than adding, means a second run for the same document leaves one copy
+    of each chunk, and a document whose text changed loses its old ones. Returns the count.
+    """
+    texts = chunk_document(db, s3, document_id)
+    # End the read's transaction, so none stays open while OpenAI answers.
+    db.commit()
+    # One call for all of the document's chunks (LangChain sends up to 1,000 per request)
+    # rather than one call each. It comes before the lock below, so the lock isn't held while
+    # OpenAI answers. If OpenAI fails, nothing has changed, and the document keeps its chunks.
+    vectors = embeddings.embed_documents(texts) if texts else []
+    # Lock the document's row until the commit, so two runs for one document take turns here
+    # instead of both saving chunks at the same positions.
+    db.execute(select(Document.id).where(Document.id == document_id).with_for_update())
+    db.execute(delete(Chunk).where(Chunk.document_id == document_id))
+    db.add_all(
+        Chunk(document_id=document_id, position=position, text=text, embedding=vector)
+        for position, (text, vector) in enumerate(zip(texts, vectors, strict=True))
+    )
+    db.commit()
+    return len(texts)
+
+
 def embed_document(document_id: int) -> int:
     """The job the API queues when the Lambda marks a document processed.
 
     It raises if something goes wrong, so RQ marks the job failed and keeps it with its error.
-    Returns how many chunks the document's text made.
+    Returns how many chunks the document has now.
     """
     with SessionLocal() as db:
-        chunks = chunk_document(db, get_s3_client(), document_id)
-    logger.info("Document %s split into %s chunks", document_id, len(chunks))
-    return len(chunks)
+        count = save_chunks(db, get_s3_client(), get_embeddings(), document_id)
+    if count:
+        logger.info("Document %s has %s chunks, each with its embedding", document_id, count)
+    else:
+        # Most likely a scanned PDF, whose pages are pictures of text.
+        logger.warning("Document %s has no text, so the bot can't answer from it", document_id)
+    return count

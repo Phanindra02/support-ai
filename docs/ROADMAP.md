@@ -147,7 +147,7 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 - [x] Add a background worker using RQ, on the Redis the project already uses. `worker/main.py`, run by compose's `worker` service from the API's image. Redis now saves every write to a volume (append-only), so queued jobs survive a restart.
 - [x] When a doc is marked processed, have the API queue a job for it. Every call queues it, a repeat too, so if Redis was down the Lambda's retry queues it. Built with step 7, since the job has nothing to do until it reads the text.
 - [x] In the worker, load the text from S3 and split it with LangChain's text splitter (start at about 1,000 characters with some overlap). `RecursiveCharacterTextSplitter`, at 1,000 characters with 200 of overlap, cuts between paragraphs where it can. The server's role may now read under `text/`.
-- [ ] Embed each chunk and save it to pgvector.
+- [x] Embed each chunk and save it to pgvector. LangChain's `OpenAIEmbeddings` with `text-embedding-3-small`, all of a document's chunks in one call. The job replaces the document's chunks in one transaction, so a second run leaves one copy, and a failed OpenAI call changes nothing.
 - [ ] Build `POST /ask`: embed the question and pull the 4 closest chunks.
 - [ ] Send those chunks to the LLM with instructions to answer only from them and say "I don't know" otherwise.
 - [ ] Return the answer along with the names of the source docs.

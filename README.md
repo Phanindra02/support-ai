@@ -358,7 +358,7 @@ curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.
 
 Only the Lambda calls this, after saving a PDF's text to S3. It sends the shared secret in `X-Webhook-Secret`, and the two keys: the upload's, which finds the document, and where the text is. [infra/aws/README.md](infra/aws/README.md#pulling-the-text-out-of-uploads-lambda) explains the Lambda.
 
-It marks the document `processed`, then queues a job for the worker, which reads the text from S3 and splits it into chunks of about 1,000 characters (`worker/jobs.py`). The Lambda doesn't wait for that.
+It marks the document `processed`, then queues a job for the worker, which reads the text from S3, splits it into chunks of about 1,000 characters, embeds them with OpenAI's `text-embedding-3-small` in one call, and saves them to the `chunks` table (`worker/jobs.py`). The Lambda doesn't wait for that. The worker needs `OPENAI_API_KEY`, and the tests never use it: they empty it, and use LangChain's fake embeddings.
 
 ```bash
 curl -H "X-Webhook-Secret: $LAMBDA_WEBHOOK_SECRET" -H "Content-Type: application/json" \

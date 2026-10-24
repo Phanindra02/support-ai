@@ -13,7 +13,7 @@ from rq import Queue
 from app.config import settings
 
 # The job that splits a processed document into chunks and embeds them (worker/jobs.py). It's
-# queued by its import path, so the API never imports the worker's code, or LangChain.
+# queued by its import path, so the API doesn't import the worker's code to queue it.
 EMBED_DOCUMENT = "worker.jobs.embed_document"
 
 
