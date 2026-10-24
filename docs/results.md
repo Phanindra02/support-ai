@@ -207,3 +207,21 @@ Measured on 2026-10-24 with `uv run python -m ml.prepare`. Cleaning lowercases e
 
 - Tickets: medium 40.5%, high 38.8%, low 20.7%, in both sets.
 - Tweets: negative 63.5%, neutral 20.8%, positive 15.6% in training and 15.7% in testing. Cleaning dropped 364 tweets, more than the 213 exact repeats, because tweets that differed only in their @handle, link, or capitals became repeats.
+
+## Priority model scores (Stage 7)
+
+Every model is trained on the 13,070 training tickets and scored once on the 3,268 test tickets (see above). Macro F1 is the plain average of the three F1 scores, so the rare low class counts as much as the others. That makes it the number to compare.
+
+### Baseline: TF-IDF and Logistic Regression
+
+Measured on 2026-10-24 with `uv run python -m ml.train tickets baseline`, which took about 3 seconds on the M-series Mac. TF-IDF on words and word pairs seen in at least 2 tickets, then scikit-learn's `LogisticRegression` with its default settings.
+
+| | Precision | Recall | F1 | Tickets |
+|---|---|---|---|---|
+| high | 0.666 | 0.707 | 0.686 | 1,269 |
+| medium | 0.598 | 0.737 | 0.661 | 1,324 |
+| low | 0.725 | 0.313 | 0.437 | 675 |
+| Accuracy | | | 0.638 | 3,268 |
+| Macro average | 0.663 | 0.586 | 0.594 | |
+
+- Low-priority recall is 0.313: the model calls most low tickets medium or high, because low is the smallest class and guessing the bigger ones is safer. When it does say low, it's right 72.5% of the time.
