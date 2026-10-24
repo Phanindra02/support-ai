@@ -19,12 +19,13 @@ COMPOSE_FILES = [PROJECT_ROOT / "docker-compose.yml", PROJECT_ROOT / "infra/aws/
 # The settings with no default, which the app can't start without.
 REQUIRED = {"DATABASE_URL": URL, "REDIS_URL": REDIS_URL, "JWT_SECRET_KEY": JWT_SECRET_KEY}
 
-# Values that would let someone sign tokens, fake a webhook, or open the database.
+# Values that would let someone sign tokens, fake a webhook, open the database, or spend money.
 SECRETS = {
     "JWT_SECRET_KEY",
     "TWILIO_AUTH_TOKEN",
     "N8N_WEBHOOK_SECRET",
     "LAMBDA_WEBHOOK_SECRET",
+    "OPENAI_API_KEY",
     "POSTGRES_PASSWORD",
 }
 

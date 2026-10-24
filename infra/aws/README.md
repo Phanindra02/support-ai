@@ -354,8 +354,10 @@ On EC2, every secret the app needs is a SecureString parameter under `/support-a
 | `/support-ai/JWT_SECRET_KEY` | Signs agents' login tokens | A random value, made below |
 | `/support-ai/TWILIO_AUTH_TOKEN` | Checks that WhatsApp webhooks came from Twilio | The developer, copied from the Mac's `.env` |
 | `/support-ai/N8N_WEBHOOK_SECRET` | Proves alerts to n8n came from the API | The developer, once the server's n8n has the workflow |
+| `/support-ai/LAMBDA_WEBHOOK_SECRET` | Proves the Lambda sent "this document is processed" | A random value, made with the Lambda ([below](#pulling-the-text-out-of-uploads-lambda)) |
+| `/support-ai/OPENAI_API_KEY` | Pays for embeddings and the bot's answers | The developer, copied from the Mac's `.env` |
 
-**How the app loads them.** `compose.ec2.yml` sets `PARAMETER_STORE_PATH=/support-ai` for the API and the migrations. When the app starts, `app/config.py` makes one `GetParametersByPath` request (more if there are over 10), with decryption, and the part of each name after the last `/` names the setting it fills. The first place that sets a value wins: a real environment variable, then `.env`, then Parameter Store, then the default in `app/config.py`. So the server's `.env` must leave these four out, or empty (`NAME=` counts as not set). On the Mac and in CI, `PARAMETER_STORE_PATH` is empty, and the app never asks AWS.
+**How the app loads them.** `compose.ec2.yml` sets `PARAMETER_STORE_PATH=/support-ai` for the API and the migrations. When the app starts, `app/config.py` makes one `GetParametersByPath` request (more if there are over 10), with decryption, and the part of each name after the last `/` names the setting it fills. The first place that sets a value wins: a real environment variable, then `.env`, then Parameter Store, then the default in `app/config.py`. So the server's `.env` must leave these out, or empty (`NAME=` counts as not set). On the Mac and in CI, `PARAMETER_STORE_PATH` is empty, and the app never asks AWS.
 
 The app reads them only when it starts. If AWS can't be reached, the API stops within about a minute with an error, rather than running without its secrets, and Docker starts it again (`restart: unless-stopped`).
 
@@ -388,6 +390,13 @@ aws ssm put-parameter --region us-east-2 --name /support-ai/N8N_WEBHOOK_SECRET -
 # Then copy it into the Header Auth credential of the server's n8n:
 aws ssm get-parameter --region us-east-2 --name /support-ai/N8N_WEBHOOK_SECRET \
   --with-decryption --query Parameter.Value --output text
+```
+
+`OPENAI_API_KEY` (Stage 6) is the same key as the Mac's, read from its `.env` like Twilio's token, so it's never shown or saved in the shell's history:
+
+```bash
+aws ssm put-parameter --region us-east-2 --name /support-ai/OPENAI_API_KEY --type SecureString \
+  --value "$(grep '^OPENAI_API_KEY=' .env | cut -d= -f2-)"
 ```
 
 Then, on the server, empty the secrets in `.env`, so Parameter Store's values are used, and restart. `POSTGRES_PASSWORD` stays, because `docker-compose.yml` won't load without it, though the container it was for no longer runs.
