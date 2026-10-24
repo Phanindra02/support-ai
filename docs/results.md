@@ -195,3 +195,15 @@ Measured on 2026-10-24 with `uv run python -m ml.explore`.
 
 - No tweet is missing its text or label, but 213 texts appear more than once, mostly retweets. They're dropped before the split, so no tweet is in both the training and test sets.
 - Median 19 words, longest 36. Negative tweets run longer (median 21 words) than neutral or positive ones (14).
+
+## Stage 7 training and test sets
+
+Measured on 2026-10-24 with `uv run python -m ml.prepare`. Cleaning lowercases each text, drops links, @handles, and HTML escapes like `&amp;`, then drops empty texts and repeats. A stratified split holds back 20% for testing, with seed 42.
+
+| | Rows | After cleaning | Train | Test |
+|---|---|---|---|---|
+| Tickets | 16,338 | 16,338 | 13,070 | 3,268 |
+| Tweets | 14,640 | 14,276 | 11,420 | 2,856 |
+
+- Tickets: medium 40.5%, high 38.8%, low 20.7%, in both sets.
+- Tweets: negative 63.5%, neutral 20.8%, positive 15.6% in training and 15.7% in testing. Cleaning dropped 364 tweets, more than the 213 exact repeats, because tweets that differed only in their @handle, link, or capitals became repeats.
