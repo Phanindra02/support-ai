@@ -140,8 +140,8 @@ Why Graviton: it runs on ARM like the Mac, so images built locally run on it as-
 
 Done when: WhatsApp questions get answers from the docs with sources, and accuracy is measured on 25 test questions.
 
-- [ ] **[You]** Get an OpenAI API key. Use it for both chat and embeddings, so there's one provider.
-- [ ] **[You]** Store the key in Parameter Store, and in `.env` for local work.
+- [x] **[You]** Get an OpenAI API key. Use it for both chat and embeddings, so there's one provider. OpenAI accepts it: `GET /v1/models` answers 200 from the Mac and from the server.
+- [x] **[You]** Store the key in Parameter Store, and in `.env` for local work. It's the SecureString `/support-ai/OPENAI_API_KEY`, copied from `.env` without being shown. The server's API loaded it when the deploy of `sha-4ceb23e` restarted it, and it isn't in the container's environment.
 - [ ] Turn on pgvector with `CREATE EXTENSION vector;` on RDS. Locally, switch the compose Postgres image to `pgvector/pgvector`.
 - [ ] Add a chunks table with document id, chunk text, and embedding.
 - [ ] Add a background worker using RQ, on the Redis the project already uses.
