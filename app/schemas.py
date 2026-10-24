@@ -332,3 +332,30 @@ class DocumentProcessed(BaseModel):
 
     s3_key: Annotated[str, Field(pattern=UPLOAD_KEY_PATTERN)]
     text_s3_key: Annotated[str, Field(pattern=TEXT_KEY_PATTERN)]
+
+
+# The bot
+
+
+class AskRequest(BaseModel):
+    """A question for the bot, the same as a customer would send it on WhatsApp."""
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        extra="forbid",
+        json_schema_extra={"examples": [{"question": "How long does a refund take?"}]},
+    )
+
+    # Twilio allows 1,600 characters in a WhatsApp message, so no customer can ask a longer
+    # question. A longer one would only cost more to embed and send to the LLM.
+    question: Annotated[str, Field(min_length=1, max_length=1600), NoNul]
+
+
+class AskResponse(BaseModel):
+    """The bot's answer, and the filenames of the help docs it came from, closest first.
+
+    When the docs don't hold the answer, it's "I don't know." with no sources.
+    """
+
+    answer: str
+    sources: list[str]

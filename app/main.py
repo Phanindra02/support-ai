@@ -7,7 +7,7 @@ from fastapi.responses import Response
 
 from app.body_limit import BodySizeLimit
 from app.rate_limit import rate_limit
-from app.routers import agents, auth, documents, tickets, webhooks
+from app.routers import agents, ask, auth, documents, tickets, webhooks
 from app.routers.documents import MAX_PDF_BYTES
 from app.schemas import ErrorResponse
 
@@ -54,6 +54,7 @@ api.include_router(auth.router)
 api.include_router(agents.router)
 api.include_router(tickets.router)
 api.include_router(documents.router)
+api.include_router(ask.router)
 app.include_router(api)
 app.include_router(webhooks.router)
 app.include_router(documents.webhook_router)

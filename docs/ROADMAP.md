@@ -148,9 +148,9 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 - [x] When a doc is marked processed, have the API queue a job for it. Every call queues it, a repeat too, so if Redis was down the Lambda's retry queues it. Built with step 7, since the job has nothing to do until it reads the text.
 - [x] In the worker, load the text from S3 and split it with LangChain's text splitter (start at about 1,000 characters with some overlap). `RecursiveCharacterTextSplitter`, at 1,000 characters with 200 of overlap, cuts between paragraphs where it can. The server's role may now read under `text/`.
 - [x] Embed each chunk and save it to pgvector. LangChain's `OpenAIEmbeddings` with `text-embedding-3-small`, all of a document's chunks in one call. The job replaces the document's chunks in one transaction, so a second run leaves one copy, and a failed OpenAI call changes nothing.
-- [ ] Build `POST /ask`: embed the question and pull the 4 closest chunks.
-- [ ] Send those chunks to the LLM with instructions to answer only from them and say "I don't know" otherwise.
-- [ ] Return the answer along with the names of the source docs.
+- [x] Build `POST /ask`: embed the question and pull the 4 closest chunks. pgvector orders chunks by cosine distance to the question. Only logged-in agents may ask, since every question costs an OpenAI call; customers reach the bot through WhatsApp.
+- [x] Send those chunks to the LLM with instructions to answer only from them and say "I don't know" otherwise. `gpt-4.1-mini` at temperature 0, with the rules in the system message and the customer's words in their own. Built with steps 10 and 12 in `app/bot.py`, since none is useful alone.
+- [x] Return the answer along with the names of the source docs. Each doc once, closest first, and none when the bot doesn't know.
 - [ ] Route WhatsApp messages to the bot first.
 - [ ] If the bot doesn't know, open a ticket for a human and tell the customer someone will follow up.
 - [ ] Cache answers in Redis, keyed by the cleaned-up question text.
