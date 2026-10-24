@@ -183,9 +183,9 @@ Done when: a model service sets each new ticket's priority, flags angry customer
 
 ### System design
 
-- [ ] Learn batch vs real-time predictions, model versioning, and monitoring for drift.
-- [ ] Learn safe model rollouts: shadow testing and gradual traffic shifts.
-- [ ] Apply it: write down how to switch the priority model to a new version without downtime.
+- [x] Learn batch vs real-time predictions, model versioning, and monitoring for drift. `docs/system-design/14-ml-serving.md`.
+- [x] Learn safe model rollouts: shadow testing and gradual traffic shifts. `docs/system-design/15-model-rollouts.md`.
+- [x] Apply it: write down how to switch the priority model to a new version without downtime. The last section of `15-model-rollouts.md`. Nothing in the request path calls the model service, and the worker retries, so a restart only delays a priority by seconds.
 
 ## Stage 8: Kubernetes and EKS
 
