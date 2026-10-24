@@ -28,6 +28,7 @@ from app.cache import RedisDep, clear_cache
 from app.config import settings
 from app.database import SessionDep
 from app.models import Customer, Message, MessageSender, Ticket, TicketStatus
+from app.queue import QueueDep, queue_priority_prediction
 from app.routers.tickets import STATS_KEY, get_or_create_customer
 from app.schemas import ErrorResponse, WhatsAppMessage
 
@@ -224,7 +225,11 @@ def add_to_ticket(db: Session, message: WhatsAppMessage) -> tuple[Ticket, bool]:
     responses={200: {"content": {"application/xml": {}}, "description": "TwiML for Twilio"}},
 )
 def receive_whatsapp_message(
-    message: Annotated[WhatsAppMessage, Form()], db: SessionDep, redis: RedisDep, bot: BotDep
+    message: Annotated[WhatsAppMessage, Form()],
+    db: SessionDep,
+    redis: RedisDep,
+    bot: BotDep,
+    queue: QueueDep,
 ):
     """Twilio calls this for each WhatsApp message a customer sends.
 
@@ -252,4 +257,5 @@ def receive_whatsapp_message(
     # <Response/> tells Twilio there's nothing to send.
     if is_new:
         reply.message(confirmation(ticket.id))
+        queue_priority_prediction(queue, ticket.id)
     return twiml(reply)

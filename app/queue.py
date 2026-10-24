@@ -4,10 +4,12 @@ RQ keeps each job in Redis: the function to run, its arguments, and afterwards i
 its error. Work that calls OpenAI or reads S3 goes here, so no request waits for it.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends
 from redis import Redis
+from redis.exceptions import RedisError
 from rq import Queue, Retry
 
 from app.config import settings
@@ -21,6 +23,15 @@ EMBED_DOCUMENT = "worker.jobs.embed_document"
 # registry, a separate list in Redis, with its error, until someone looks
 # (scripts/failed_jobs.py). Running it again is safe: it replaces the document's chunks.
 EMBED_RETRY = Retry(max=3, interval=[30, 120, 600])
+
+# The job that asks the model service for a new ticket's priority (worker/jobs.py).
+PREDICT_PRIORITY = "worker.jobs.predict_priority"
+
+# Shorter waits than embedding: an agent may open the ticket within minutes, and the model
+# service is only down while it restarts.
+PREDICT_RETRY = Retry(max=3, interval=[5, 30, 120])
+
+logger = logging.getLogger(__name__)
 
 
 def make_queue(url: str) -> Queue:
@@ -40,3 +51,17 @@ def get_queue() -> Queue:
 
 
 QueueDep = Annotated[Queue, Depends(get_queue)]
+
+
+def queue_priority_prediction(queue: Queue, ticket_id: int) -> None:
+    """Queue the priority prediction for a new ticket, if the model service is set up.
+
+    A ticket is never turned away over this. If Redis is down, the ticket is still saved, at
+    medium priority, and an agent can set it.
+    """
+    if not settings.model_service_url:
+        return
+    try:
+        queue.enqueue(PREDICT_PRIORITY, ticket_id, retry=PREDICT_RETRY)
+    except RedisError as error:
+        logger.warning("Couldn't queue ticket %s for a priority prediction: %s", ticket_id, error)

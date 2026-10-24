@@ -14,6 +14,8 @@ services:
       # !reset drops docker-compose.yml's URL for the postgres container. A variable would
       # win over Parameter Store, so it must not be set at all.
       DATABASE_URL: !reset null
+      # The model service is off on the server for now (below), so no prediction is queued.
+      MODEL_SERVICE_URL: !reset null
 
   migrate:
     environment:
@@ -27,6 +29,7 @@ services:
     environment:
       PARAMETER_STORE_PATH: /support-ai
       DATABASE_URL: !reset null
+      MODEL_SERVICE_URL: !reset null
 
   # A service with a profile only starts when that profile is asked for, so `docker compose up`
   # leaves Postgres out on the server.

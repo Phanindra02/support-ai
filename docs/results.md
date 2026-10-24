@@ -315,3 +315,10 @@ Measured on 2026-10-24 with `docker image ls support-ai-model` after `docker com
 - The image is 659 MB. Its virtual environment is 335 MB: SciPy 149 MB and NumPy 69 MB (each with its bundled libraries), scikit-learn 57 MB, and botocore 31 MB. scikit-learn needs SciPy and NumPy, so most of the size comes with the models' one library.
 - It installs only the `service` dependency group, without the API's packages, and copies only four files from `ml/`.
 - Started with `docker compose up -d model`, it was healthy within a few seconds and answered `/predict/priority` from inside the container.
+
+## Priority prediction job (Stage 7)
+
+Measured on 2026-10-24 with the compose stack on the Mac (`docker compose up -d --build api worker model`). From the API container, a ticket was saved ("Production outage" / "Our whole site is down and no customer can pay...") and its prediction queued with `queue_priority_prediction`.
+
+- The ticket was created at medium, and 4 seconds later it was high.
+- The worker's log says `worker.jobs.predict_priority(1)` completed in 0.66 seconds, which covers reading the ticket, calling the model container, and saving the priority.

@@ -23,6 +23,7 @@ x-api: &api
     DATABASE_URL: postgresql+psycopg://support:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/support
     REDIS_URL: redis://redis:6379/0
     N8N_WEBHOOK_URL: http://n8n:5678/webhook/urgent-ticket
+    MODEL_SERVICE_URL: http://model:8000
     # Trust ngrok's X-Forwarded-Proto and X-Forwarded-For headers only from this network's
     # gateway, where every connection from the Mac arrives, ngrok's included. The Twilio
     # signature needs the https:// URL, and the rate limit needs the customer's real IP.
