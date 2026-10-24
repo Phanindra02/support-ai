@@ -146,3 +146,23 @@ A whole run takes about 2 minutes, and `test` then `image` are the critical path
 | Memory used | 121 of 512 MB |
 
 Lambda now bills the container's start too, so a cold run is billed for both: 1,557 ms at 0.5 GB is 0.78 GB-seconds, about $0.00001 past the free allowance of 400,000 GB-seconds a month. A run that finds a warm container skips the 655 ms. The function used under a quarter of its memory, so 256 MB would likely do, but Lambda gives CPU in proportion to memory, so pypdf would run slower. Only one PDF was measured, so these are a first look, not a benchmark.
+
+## Bot accuracy on 25 questions (Stage 6)
+
+Measured on 2026-10-24 with `uv run python -m scripts.measure_bot`, against the three sample help docs and the 25 questions in `docs/help-docs/` (24 answered in the docs, 1 that isn't). It uses the real `text-embedding-3-small` and `gpt-4.1-mini` at temperature 0, the bot's own prompt, and the same cosine distance pgvector uses, in memory. About $0.02 a run.
+
+- Retrieval: one of the chunks found holds the answer's key phrase (24 answerable questions).
+- Answer: the reply holds that phrase, or says "I don't know." for the question the docs don't answer.
+- Source: the bot names exactly the doc the answer is in, and none when it doesn't know.
+
+| Chunk size | Chunks in all | Chunks per question | Retrieval | Answers | Sources |
+|---|---|---|---|---|---|
+| 1,000 (kept) | 12 | 4 | 24/24 | 25/25 | 25/25 |
+| 1,000 | 12 | 2 | 24/24 | 25/25 | 25/25 |
+| 500 | 23 | 4 | 24/24 | 25/25 | 25/25 |
+| 500 | 23 | 2 | 24/24 | 25/25 | 25/25 |
+| 1,500 | 9 | 2 | 24/24 | 25/25 | 25/25 |
+
+The first run, before a fix, scored 24/25 on answers and sources. The bot replied to the Chicago question with "I don't know." and then "Excerpts used: None", which the bot didn't strip, so it counted as an answer. On WhatsApp, that customer would have been sent "I don't know" instead of getting a ticket. The fix accepts anything after "Excerpts used:".
+
+Every setting scores perfectly, so this test set can't tell them apart: three short docs give only 9 to 23 chunks, and each question's answer is in one place. The settings stay at 1,000 characters and 4 chunks, which leaves room for answers that span two places in the docs. Telling them apart needs longer docs and questions whose answers span sections.

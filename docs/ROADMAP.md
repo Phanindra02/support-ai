@@ -142,7 +142,7 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 
 - [x] **[You]** Get an OpenAI API key. Use it for both chat and embeddings, so there's one provider. OpenAI accepts it: `GET /v1/models` answers 200 from the Mac and from the server.
 - [x] **[You]** Store the key in Parameter Store, and in `.env` for local work. It's the SecureString `/support-ai/OPENAI_API_KEY`, copied from `.env` without being shown. The server's API loaded it when the deploy of `sha-4ceb23e` restarted it, and it isn't in the container's environment.
-- [ ] Turn on pgvector with `CREATE EXTENSION vector;` on RDS. Locally, switch the compose Postgres image to `pgvector/pgvector`.
+- [x] Turn on pgvector with `CREATE EXTENSION vector;` on RDS. Locally, switch the compose Postgres image to `pgvector/pgvector`. A migration runs it, so it ran on RDS with the deploy of #19.
 - [x] Add a chunks table with document id, chunk text, and embedding. Each chunk also has its `position` in the document, unique per document, so a second run of the worker can't save every chunk twice. Embeddings are `vector(1536)`, the size of OpenAI's `text-embedding-3-small`.
 - [x] Add a background worker using RQ, on the Redis the project already uses. `worker/main.py`, run by compose's `worker` service from the API's image. Redis now saves every write to a volume (append-only), so queued jobs survive a restart.
 - [x] When a doc is marked processed, have the API queue a job for it. Every call queues it, a repeat too, so if Redis was down the Lambda's retry queues it. Built with step 7, since the job has nothing to do until it reads the text.
@@ -155,8 +155,8 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 - [x] If the bot doesn't know, open a ticket for a human and tell the customer someone will follow up. The same happens when OpenAI fails or the message has no text, so a customer always gets a reply. Built with step 13, since the old ticket path is the bot's fallback.
 - [x] Cache answers in Redis, keyed by the cleaned-up question text. Lowercased, single-spaced, and without ?, ! or . at the end, then hashed. The key also holds a docs version the worker bumps whenever a document's chunks change, so new docs make every old answer stale at once. Kept for a day.
 - [x] Write 25 test questions with known answers. `docs/help-docs/questions.json`, about three sample help docs for a made-up store (refunds, shipping, account and payments), each a `.txt` and the `.pdf` made from it with `cupsfilter`. 24 are answered in the docs, and 1 isn't, to check the bot says "I don't know."
-- [ ] Measure how often the right chunk comes back and the answer is correct, and record it in `docs/results.md`.
-- [ ] Tune chunk size and chunk count, and record the results.
+- [x] Measure how often the right chunk comes back and the answer is correct, and record it in `docs/results.md`. `scripts/measure_bot.py`: retrieval 24/24, answers 25/25, sources 25/25, after fixing a bug the first run found.
+- [x] Tune chunk size and chunk count, and record the results. Five settings all scored perfectly, so the test set is too easy to separate them; kept 1,000 characters and 4 chunks.
 
 ### System design
 

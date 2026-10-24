@@ -71,6 +71,25 @@ def test_the_bot_answers_from_the_four_closest_chunks(client, use_bot, save_chun
     assert CHUNK_COUNT == 4
 
 
+def test_only_the_excerpts_the_llm_used_are_sources(client, use_bot, save_chunks):
+    save_chunks(
+        [
+            ("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0)),
+            ("shipping.pdf", "Orders ship in 2 days.", (1.0, 0.1)),
+            ("payments.pdf", "We take PayPal.", (1.0, 0.2)),
+        ]
+    )
+    use_bot(reply="Orders ship in 2 days, and we take PayPal.\nExcerpts used: [3], 2, 9")
+
+    response = ask(client, "When will my order ship?")
+
+    # The line is cut from the answer, and 9 isn't an excerpt, so it's skipped.
+    assert response.json() == {
+        "answer": "Orders ship in 2 days, and we take PayPal.",
+        "sources": ["payments.pdf", "shipping.pdf"],
+    }
+
+
 def test_when_the_docs_dont_hold_the_answer_it_says_so_and_names_no_source(
     client, use_bot, save_chunks
 ):
@@ -82,6 +101,16 @@ def test_when_the_docs_dont_hold_the_answer_it_says_so_and_names_no_source(
 
     assert response.status_code == 200
     assert response.json() == {"answer": DONT_KNOW, "sources": []}
+
+
+def test_i_dont_know_with_an_excerpts_line_still_means_the_bot_doesnt_know(
+    client, use_bot, save_chunks
+):
+    save_chunks([("shipping.pdf", "Orders ship in 2 days.", (1.0, 0.0))])
+    # What gpt-4.1-mini replied to a question the docs don't answer, on the first real run.
+    use_bot(reply="I don't know. \n\nExcerpts used: None")
+
+    assert ask(client).json() == {"answer": DONT_KNOW, "sources": []}
 
 
 def test_with_no_docs_the_llm_isnt_asked(client, use_bot):
