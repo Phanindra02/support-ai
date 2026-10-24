@@ -269,3 +269,30 @@ The chosen model is the cross-validation winner: unweighted Logistic Regression 
 - Once C is tuned, weights add little to Logistic Regression: low recall rises to 0.640, but the other labels lose about as much. The cross-validation scores differ by 0.002, which is noise, so the plain model stays.
 - Weights help XGBoost much more (low recall 0.253 to 0.578), but it still trails Logistic Regression by about 0.09 macro F1 and trains 100 times slower.
 - Every test score is about 0.07 above its cross-validation score. Each cross-validation model learns from two thirds of the training tickets (about 8,700), while the final one learns from all 13,070, so the model is still getting better with more data.
+
+## Sentiment model scores (Stage 7)
+
+Measured on 2026-10-24 on the 11,420 training tweets and 2,856 test tweets (see the split above). The baseline came from `uv run python -m ml.train tweets baseline`, and the tuning from `uv run python -m ml.tune tweets`, which took 1 minute 34 seconds. The models, grids, folds, and weights are the same as for the priority model.
+
+| Model | Weighted | Best setting | Cross-validation macro F1 | Test macro F1 | Test recall: negative / neutral / positive |
+|---|---|---|---|---|---|
+| Baseline | no | C=1 | | 0.716 | 0.963 / 0.450 / 0.611 |
+| Logistic Regression | no | C=30 | 0.707 | 0.738 | 0.921 / 0.550 / 0.685 |
+| Logistic Regression | yes | C=1 | **0.730** | **0.743** | 0.847 / 0.662 / 0.749 |
+| XGBoost | no | depth 6 | 0.708 | 0.724 | 0.913 / 0.539 / 0.653 |
+| XGBoost | yes | depth 6 | 0.716 | 0.712 | 0.778 / 0.697 / 0.745 |
+
+The chosen model is the cross-validation winner: weighted Logistic Regression with C=1. On the test tweets:
+
+| | Precision | Recall | F1 | Tweets |
+|---|---|---|---|---|
+| negative | 0.888 | 0.847 | 0.867 | 1,814 |
+| neutral | 0.594 | 0.662 | 0.626 | 595 |
+| positive | 0.722 | 0.749 | 0.735 | 447 |
+| Accuracy | | | 0.793 | 2,856 |
+| Macro average | 0.735 | 0.753 | 0.743 | |
+
+- Here weights matter, unlike for the tickets: negative is 63.5% of the tweets, so without weights the model leans toward calling things negative. That gives high negative recall (0.963 for the baseline) but low precision (0.805). Weighting trades some negative recall for precision of 0.888, so fewer calm customers get flagged as angry, and neutral recall rises from 0.450 to 0.662.
+- Accuracy drops slightly (0.801 to 0.793), because the weighted model stops leaning on the biggest class. Macro F1 is what was chosen on.
+- Neutral is the hardest label: many neutral tweets are questions that use the same words as complaints.
+- XGBoost comes much closer here than on the tickets, and the whole tuning run took 1.5 minutes against 5.5, since tweets are short and give far fewer word features.
