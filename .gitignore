@@ -20,3 +20,6 @@ reports/
 
 # Generated knowledge graph (rebuild with /graphify)
 graphify-out/
+
+# Kaggle datasets (Stage 7). Licensed for non-commercial use, so not published here.
+ml/data/
