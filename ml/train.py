@@ -1,18 +1,22 @@
 """Train a model on a dataset's training set and score it on the test set.
 
 uv run python -m ml.train tickets baseline
+uv run python -m ml.train tickets xgboost
 """
 
 import sys
 
+import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
-from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.pipeline import Pipeline, make_pipeline, make_union
+from sklearn.preprocessing import FunctionTransformer, LabelEncoder
+from xgboost import XGBClassifier
 
 from ml.datasets import load_tickets, load_tweets
-from ml.prepare import clean, split
+from ml.prepare import SEED, clean, split
 
 DATASETS = {"tickets": load_tickets, "tweets": load_tweets}
 
@@ -31,7 +35,39 @@ def baseline() -> Pipeline:
     return make_pipeline(tfidf(), LogisticRegression(max_iter=1000))
 
 
-MODELS = {"baseline": baseline}
+def text_extras(texts) -> np.ndarray:
+    """Numbers about each text that its words miss: its length, and how many ! and ? it has."""
+    texts = pd.Series(texts)
+    return np.column_stack(
+        [texts.str.len(), texts.str.split().str.len(), texts.str.count("!"), texts.str.count(r"\?")]
+    )
+
+
+class LabeledXGBClassifier(XGBClassifier):
+    """XGBoost only takes labels numbered 0, 1, 2. This one takes and returns label names."""
+
+    def fit(self, X, y, **kwargs):
+        self.encoder_ = LabelEncoder().fit(y)
+        return super().fit(X, self.encoder_.transform(y), **kwargs)
+
+    def predict(self, X, **kwargs):
+        return self.encoder_.inverse_transform(super().predict(X, **kwargs))
+
+
+def xgboost_model() -> Pipeline:
+    """Boosted trees on the TF-IDF weights plus the text extras.
+
+    Each tree corrects the mistakes of the trees before it, and trees can mix features in ways a
+    linear model can't, like a long ticket that also says "urgent".
+    """
+    features = make_union(tfidf(), FunctionTransformer(text_extras))
+    trees = LabeledXGBClassifier(
+        n_estimators=300, learning_rate=0.1, max_depth=6, n_jobs=-1, random_state=SEED
+    )
+    return make_pipeline(features, trees)
+
+
+MODELS = {"baseline": baseline, "xgboost": xgboost_model}
 
 
 def evaluate(model: Pipeline, test: pd.DataFrame) -> dict:

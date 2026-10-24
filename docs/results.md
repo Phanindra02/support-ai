@@ -225,3 +225,18 @@ Measured on 2026-10-24 with `uv run python -m ml.train tickets baseline`, which 
 | Macro average | 0.663 | 0.586 | 0.594 | |
 
 - Low-priority recall is 0.313: the model calls most low tickets medium or high, because low is the smallest class and guessing the bigger ones is safer. When it does say low, it's right 72.5% of the time.
+
+### XGBoost on TF-IDF and text extras
+
+Measured on 2026-10-24 with `uv run python -m ml.train tickets xgboost`, which took 36 seconds on the Mac's cores (206 seconds of CPU time). The same TF-IDF, plus four extras for each ticket: characters, words, `!` marks, and `?` marks. XGBoost with 300 trees, learning rate 0.1, depth 6.
+
+| | Precision | Recall | F1 | Tickets |
+|---|---|---|---|---|
+| high | 0.660 | 0.680 | 0.670 | 1,269 |
+| medium | 0.574 | 0.755 | 0.652 | 1,324 |
+| low | 0.781 | 0.253 | 0.383 | 675 |
+| Accuracy | | | 0.622 | 3,268 |
+| Macro average | 0.671 | 0.563 | 0.568 | |
+
+- XGBoost scores below the baseline on every F1, and low-priority recall drops further, to 0.253. TF-IDF gives tens of thousands of sparse columns, each a word that's in few tickets. A linear model weighs all of them at once, while each tree splits on only a few, so on text this is a common result.
+- The extras don't rescue it: the exploration found the median ticket is 60 words at every priority, so length carries little signal.
