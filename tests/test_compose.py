@@ -21,10 +21,12 @@ RESET = "!reset"
 
 
 class ComposeLoader(yaml.SafeLoader):
-    """safe_load, plus the !reset tag compose uses to drop a value from an earlier file."""
+    """safe_load, plus compose's tags: !reset drops a value from an earlier file, and !override
+    replaces it. Here !override reads as the list it sets, the only kind this project uses."""
 
 
 ComposeLoader.add_constructor(RESET, lambda loader, node: RESET)
+ComposeLoader.add_constructor("!override", lambda loader, node: loader.construct_sequence(node))
 
 
 @pytest.fixture(scope="module")
@@ -174,11 +176,19 @@ def test_the_model_service_reads_the_macs_saved_models(services):
     assert "healthcheck" in services["model"]
 
 
-def test_on_ec2_the_model_service_stays_off_until_its_image_is_published(ec2_services):
-    assert ec2_services["model"]["profiles"]
-    # And nothing asks it for predictions, which would only fail.
+def test_on_ec2_the_model_service_runs_ci_s_image_and_downloads_its_models(ec2_services):
+    model = ec2_services["model"]
+    assert "profiles" not in model
+    assert model["image"].startswith("${MODEL_IMAGE:?")
+    # The server has no ml/models folder, so the Mac's mount is replaced by a volume the
+    # downloaded models stay in.
+    assert model["volumes"] == ["model-cache:/models"]
+    assert model["environment"] == {"S3_BUCKET": "support-ai-docs-phanindra02"}
+
+
+def test_on_ec2_the_api_and_the_worker_still_ask_the_model_container(ec2_services):
     for name in ["api", "worker"]:
-        assert ec2_services[name]["environment"]["MODEL_SERVICE_URL"] == RESET
+        assert "MODEL_SERVICE_URL" not in ec2_services[name]["environment"]
 
 
 def test_on_ec2_the_postgres_container_never_starts(ec2_services):

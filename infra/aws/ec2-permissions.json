@@ -17,20 +17,29 @@
       "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/text/*"
     },
     {
+      "Sid": "ReadTheModels",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/models/*"
+    },
+    {
       "Sid": "LogInToEcr",
       "Effect": "Allow",
       "Action": "ecr:GetAuthorizationToken",
       "Resource": "*"
     },
     {
-      "Sid": "PullTheApiImage",
+      "Sid": "PullTheImages",
       "Effect": "Allow",
       "Action": [
         "ecr:BatchCheckLayerAvailability",
         "ecr:BatchGetImage",
         "ecr:GetDownloadUrlForLayer"
       ],
-      "Resource": "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+      "Resource": [
+        "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api",
+        "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-model"
+      ]
     },
     {
       "Sid": "LoadTheAppSecrets",
