@@ -153,7 +153,7 @@ Done when: WhatsApp questions get answers from the docs with sources, and accura
 - [x] Return the answer along with the names of the source docs. Each doc once, closest first, and none when the bot doesn't know.
 - [x] Route WhatsApp messages to the bot first. A customer whose ticket the team is already working on keeps talking to the team. Each OpenAI call gets 6 seconds and no retries, so the reply fits in the 15 seconds Twilio waits.
 - [x] If the bot doesn't know, open a ticket for a human and tell the customer someone will follow up. The same happens when OpenAI fails or the message has no text, so a customer always gets a reply. Built with step 13, since the old ticket path is the bot's fallback.
-- [ ] Cache answers in Redis, keyed by the cleaned-up question text.
+- [x] Cache answers in Redis, keyed by the cleaned-up question text. Lowercased, single-spaced, and without ?, ! or . at the end, then hashed. The key also holds a docs version the worker bumps whenever a document's chunks change, so new docs make every old answer stale at once. Kept for a day.
 - [ ] Write 25 test questions with known answers.
 - [ ] Measure how often the right chunk comes back and the answer is correct, and record it in `docs/results.md`.
 - [ ] Tune chunk size and chunk count, and record the results.

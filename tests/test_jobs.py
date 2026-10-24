@@ -10,6 +10,7 @@ from rq.utils import import_attribute
 from sqlalchemy import select
 
 import worker.jobs
+from app.bot import DOCS_VERSION_KEY
 from app.config import settings
 from app.embeddings import EMBEDDING_MODEL, get_embeddings
 from app.models import EMBEDDING_DIMENSIONS, Chunk, Document, DocumentStatus
@@ -233,7 +234,14 @@ def test_the_api_queues_the_worker_s_real_job():
 
 
 def test_a_processed_upload_ends_up_as_chunks_with_embeddings(
-    anonymous_client, s3, test_bucket, test_queue, session_factory, make_agent, monkeypatch
+    anonymous_client,
+    s3,
+    test_bucket,
+    test_queue,
+    redis_client,
+    session_factory,
+    make_agent,
+    monkeypatch,
 ):
     # The whole path: the Lambda's call queues the job, and the worker runs it.
     monkeypatch.setattr(settings, "lambda_webhook_secret", SECRET)
@@ -255,6 +263,7 @@ def test_a_processed_upload_ends_up_as_chunks_with_embeddings(
     monkeypatch.setattr(worker.jobs, "SessionLocal", session_factory)
     monkeypatch.setattr(worker.jobs, "get_s3_client", lambda: s3)
     monkeypatch.setattr(worker.jobs, "get_embeddings", lambda: fake_embeddings)
+    monkeypatch.setattr(worker.jobs, "get_redis", lambda: redis_client)
     [job] = test_queue.get_jobs()
     SimpleWorker([test_queue], connection=test_queue.connection).work(burst=True)
     assert job.get_status() == "finished", job.latest_result().exc_string
@@ -262,3 +271,5 @@ def test_a_processed_upload_ends_up_as_chunks_with_embeddings(
     with session_factory() as db:
         [document_id] = db.scalars(select(Document.id))
     assert saved_chunks(session_factory, document_id) == embedded(split_text(TEXT))
+    # Answers cached from the docs before this one are now stale.
+    assert redis_client.get(DOCS_VERSION_KEY) == "1"

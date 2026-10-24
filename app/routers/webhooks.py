@@ -17,12 +17,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import Response
 from openai import OpenAIError
+from redis import Redis
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 
-from app.bot import Bot, BotAnswer, BotDep, answer_question
+from app.bot import Bot, BotAnswer, BotDep, answer_with_cache
 from app.cache import RedisDep, clear_cache
 from app.config import settings
 from app.database import SessionDep
@@ -130,7 +131,9 @@ def has_active_ticket(db: Session, phone: str) -> bool:
     return ticket_id is not None
 
 
-def ask_bot(db: Session, bot: Bot | None, message: WhatsAppMessage) -> BotAnswer | None:
+def ask_bot(
+    db: Session, redis: Redis, bot: Bot | None, message: WhatsAppMessage
+) -> BotAnswer | None:
     """The bot's answer to the message, or None when the team should take it instead.
 
     The team takes it when the bot isn't set up, the message has no text, the customer is
@@ -140,7 +143,7 @@ def ask_bot(db: Session, bot: Bot | None, message: WhatsAppMessage) -> BotAnswer
     if bot is None or not question or has_active_ticket(db, message.phone):
         return None
     try:
-        answer = answer_question(db, bot, question)
+        answer = answer_with_cache(db, redis, bot, question)
     except OpenAIError:
         # The customer still gets a reply, from a person rather than the bot.
         logger.exception("The bot couldn't reach OpenAI, so the message goes to the team")
@@ -234,7 +237,7 @@ def receive_whatsapp_message(
     delivery, because Twilio only repeats a delivery when it didn't use the first reply.
     """
     reply = MessagingResponse()
-    answer = ask_bot(db, bot, message)
+    answer = ask_bot(db, redis, bot, message)
     if answer is not None:
         # Nothing is stored: a question the bot answered needs no one from the team.
         reply.message(bot_reply(answer))

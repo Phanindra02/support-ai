@@ -628,6 +628,18 @@ def test_a_message_without_text_goes_straight_to_the_team(
     assert len(all_tickets(session_factory)) == 1
 
 
+def test_customers_asking_the_same_question_share_one_cached_answer(
+    client, use_bot, refund_docs
+):
+    llm = use_bot(reply="Refunds take 5 days.")
+
+    first = send(client, "How long does a refund take?")
+    second = send(client, "how long does a refund take", From="whatsapp:+447700900123")
+
+    assert replies(second) == replies(first)
+    assert len(llm.prompts) == 1
+
+
 def test_a_long_answer_is_cut_to_fit_one_whatsapp_message(client, use_bot, refund_docs):
     use_bot(reply="Refunds take 5 days. " * 100)
 

@@ -8,16 +8,22 @@ import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.bot import (
+    ANSWER_CACHE_SECONDS,
     CHAT_MODEL,
     CHUNK_COUNT,
+    DOCS_VERSION_KEY,
     DONT_KNOW,
     INSTRUCTIONS,
     MAX_ANSWER_TOKENS,
     OPENAI_TIMEOUT,
+    answer_cache_key,
+    clean_question,
     get_bot,
     get_chat_model,
     is_dont_know,
+    start_new_docs_version,
 )
+from app.cache import make_redis
 from app.config import settings
 from app.embeddings import EMBEDDING_MODEL
 
@@ -175,3 +181,87 @@ def test_without_a_key_there_is_no_bot():
     assert get_bot() is None
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY is empty"):
         get_chat_model()
+
+
+# The cache
+
+
+def test_the_same_question_typed_differently_is_answered_from_the_cache(
+    client, use_bot, save_chunks, redis_client
+):
+    save_chunks([("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0))])
+    llm = use_bot(reply="Refunds take 5 days.")
+
+    first = ask(client, "How long does a refund take?")
+    second = ask(client, "  how LONG does a   refund take ")
+
+    assert first.headers["X-Cache"] == "MISS"
+    assert second.headers["X-Cache"] == "HIT"
+    assert (
+        second.json()
+        == first.json()
+        == {
+            "answer": "Refunds take 5 days.",
+            "sources": ["refunds.pdf"],
+        }
+    )
+    assert len(llm.prompts) == 1
+    ttl = redis_client.ttl(answer_cache_key(redis_client, QUESTION))
+    assert ANSWER_CACHE_SECONDS - 5 < ttl <= ANSWER_CACHE_SECONDS
+
+
+def test_a_different_question_isnt_answered_from_the_cache(client, use_bot, save_chunks):
+    save_chunks([("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0))])
+    llm = use_bot()
+
+    ask(client, "How long does a refund take?")
+    response = ask(client, "How long does shipping take?")
+
+    assert response.headers["X-Cache"] == "MISS"
+    assert len(llm.prompts) == 2
+
+
+def test_new_docs_make_cached_answers_stale(client, use_bot, save_chunks, redis_client):
+    # "I don't know." is cached too, so a doc uploaded later must be able to replace it.
+    llm = use_bot(reply="I don't know.")
+    assert ask(client).json()["answer"] == DONT_KNOW
+
+    save_chunks([("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0))])
+    start_new_docs_version(redis_client)  # What the worker does once the chunks are saved.
+    llm.responses = ["Refunds take 5 days."]
+    response = ask(client)
+
+    assert response.headers["X-Cache"] == "MISS"
+    assert response.json() == {"answer": "Refunds take 5 days.", "sources": ["refunds.pdf"]}
+    assert redis_client.get(DOCS_VERSION_KEY) == "1"
+
+
+def test_with_redis_down_the_bot_still_answers(client, use_bot, save_chunks, redis_is_down, caplog):
+    save_chunks([("refunds.pdf", "Refunds take 5 days.", (1.0, 0.0))])
+    use_bot(reply="Refunds take 5 days.")
+
+    response = ask(client)
+
+    assert response.status_code == 200
+    assert response.headers["X-Cache"] == "MISS"
+    assert response.json()["answer"] == "Refunds take 5 days."
+    assert "Redis failed" in caplog.text
+
+
+def test_with_redis_down_a_new_docs_version_is_skipped_not_a_crash(caplog):
+    start_new_docs_version(make_redis("redis://localhost:1/0"))
+
+    assert "Couldn't start a new docs version" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "How long does a refund take?",
+        "how long does a refund take",
+        "  How   long does a refund\ntake?!  ",
+        "HOW LONG DOES A REFUND TAKE.",
+    ],
+)
+def test_these_questions_clean_up_the_same(question):
+    assert clean_question(question) == "how long does a refund take"

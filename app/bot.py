@@ -6,6 +6,9 @@ an answer from those chunks alone. Answering only from the docs keeps it from ma
 refund policy, and saying "I don't know" lets a human take over instead.
 """
 
+import hashlib
+import json
+import logging
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -14,12 +17,16 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from redis import Redis, RedisError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.cache import read_cache, write_cache
 from app.config import settings
 from app.embeddings import get_embeddings
 from app.models import Chunk
+
+logger = logging.getLogger(__name__)
 
 # OpenAI's small, cheap model ($0.40 per million tokens in, $1.60 out). Rewording a few
 # paragraphs it's given doesn't need a bigger one. About $0.0007 per question.
@@ -36,6 +43,15 @@ MAX_ANSWER_TOKENS = 300
 # so even when both are slow there's time left to hand the message to a human instead. A
 # retry isn't worth the wait, because the fallback, a person, is better than a late answer.
 OPENAI_TIMEOUT = 6
+
+# Cached answers are kept for a day. When the docs change, they go stale sooner, through
+# DOCS_VERSION_KEY.
+ANSWER_CACHE_SECONDS = 24 * 60 * 60
+
+# A number the worker adds 1 to each time a document's chunks change. It's part of every
+# cached answer's key, so once the docs change, answers from the old ones are never found
+# again, without having to find and delete each one. Redis drops them when they expire.
+DOCS_VERSION_KEY = "docs-version"
 
 # What the bot says when the chunks don't hold the answer. Step 14 checks for it, to hand the
 # question to a human.
@@ -63,6 +79,8 @@ class BotAnswer:
 
     text: str
     sources: list[str]
+    # Whether it came from the cache in Redis, rather than from OpenAI just now.
+    cached: bool = False
 
     @property
     def known(self) -> bool:
@@ -154,3 +172,48 @@ def answer_question(db: Session, bot: Bot, question: str) -> BotAnswer:
     # Each doc once, closest first. dict keeps the order things were added in.
     sources = list(dict.fromkeys(chunk.document.filename for chunk in chunks))
     return BotAnswer(text=text, sources=sources)
+
+
+def clean_question(question: str) -> str:
+    """The question in lowercase, with single spaces and no ?, ! or . at the end.
+
+    So questions typed differently only in those ways find the same cached answer.
+    """
+    return " ".join(question.lower().split()).rstrip("?!.")
+
+
+def answer_cache_key(redis: Redis, question: str) -> str:
+    """Where the answer to this question is cached, for the docs as they are now."""
+    # With Redis down this is "0", and the lookup that follows misses.
+    version = read_cache(redis, DOCS_VERSION_KEY) or "0"
+    # A hash keeps every key the same short length, however long the question.
+    digest = hashlib.sha256(clean_question(question).encode()).hexdigest()
+    return f"answer:{version}:{digest}"
+
+
+def answer_with_cache(db: Session, redis: Redis, bot: Bot, question: str) -> BotAnswer:
+    """The cached answer to the question, or a new one from OpenAI, which is then cached.
+
+    Cache-aside, like the ticket stats: look in Redis first, and on a miss work it out and
+    save it. "I don't know." is cached too, and a new doc that answers it starts a new
+    version of the docs. Raises OpenAIError like answer_question, on a miss.
+    """
+    key = answer_cache_key(redis, question)
+    cached = read_cache(redis, key)
+    if cached is not None:
+        return BotAnswer(**json.loads(cached), cached=True)
+    answer = answer_question(db, bot, question)
+    value = json.dumps({"text": answer.text, "sources": answer.sources})
+    write_cache(redis, key, value, ANSWER_CACHE_SECONDS)
+    return answer
+
+
+def start_new_docs_version(redis: Redis) -> None:
+    """Make every cached answer stale, because the docs they came from have changed."""
+    try:
+        redis.incr(DOCS_VERSION_KEY)
+    except RedisError as error:
+        logger.warning(
+            "Couldn't start a new docs version, so cached answers may be up to a day old: %s",
+            error,
+        )

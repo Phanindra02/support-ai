@@ -8,6 +8,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.bot import start_new_docs_version
+from app.cache import get_redis
 from app.config import settings
 from app.database import SessionLocal
 from app.embeddings import get_embeddings
@@ -81,6 +83,8 @@ def embed_document(document_id: int) -> int:
     """
     with SessionLocal() as db:
         count = save_chunks(db, get_s3_client(), get_embeddings(), document_id)
+    # After the commit, so an answer cached from here on comes from the new chunks.
+    start_new_docs_version(get_redis())
     if count:
         logger.info("Document %s has %s chunks, each with its embedding", document_id, count)
     else:
