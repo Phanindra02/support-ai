@@ -10,6 +10,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import ProgrammingError
 
 from app.config import PROJECT_ROOT
 from app.database import Base
@@ -69,6 +70,14 @@ def test_upgrade_turns_on_the_pgvector_that_compose_and_rds_have(empty_database,
     with empty_database.connect() as connection:
         version_num = connection.execute(text("SHOW server_version_num")).scalar()
     assert int(version_num) // 10000 == int(postgres)
+
+
+def test_a_pgvector_installed_by_hand_stops_the_migration(empty_database, migrate):
+    # It could be any version, and the downgrade would drop it, so the migration won't adopt it.
+    with empty_database.begin() as connection:
+        connection.execute(text("CREATE EXTENSION vector"))
+    with pytest.raises(ProgrammingError, match='extension "vector" already exists'):
+        migrate(empty_database, command.upgrade, "head")
 
 
 def test_each_migration_can_be_undone_and_redone(empty_database, migrate, scripts):
