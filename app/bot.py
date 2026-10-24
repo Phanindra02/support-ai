@@ -73,6 +73,12 @@ Never guess, and never use anything you know that isn't in the excerpts."""
 EXCERPTS_USED = re.compile(r"\s*Excerpts used:([^\n]*)$", re.IGNORECASE)
 
 
+# Also part of every cached answer's key, so changing how the bot answers (its model, chunk
+# count, or instructions) means answers made the old way are never served. Without it, a
+# deploy that changed the instructions kept serving answers cached before it for a day.
+BOT_VERSION = hashlib.sha256(f"{CHAT_MODEL}|{CHUNK_COUNT}|{INSTRUCTIONS}".encode()).hexdigest()[:12]
+
+
 @dataclass
 class Bot:
     """The two OpenAI models the bot uses: one embeds the question, one writes the answer."""
@@ -208,7 +214,7 @@ def answer_cache_key(redis: Redis, question: str) -> str:
     version = read_cache(redis, DOCS_VERSION_KEY) or "0"
     # A hash keeps every key the same short length, however long the question.
     digest = hashlib.sha256(clean_question(question).encode()).hexdigest()
-    return f"answer:{version}:{digest}"
+    return f"answer:{BOT_VERSION}:{version}:{digest}"
 
 
 def answer_with_cache(db: Session, redis: Redis, bot: Bot, question: str) -> BotAnswer:
