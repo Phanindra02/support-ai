@@ -23,3 +23,5 @@ graphify-out/
 
 # Kaggle datasets (Stage 7). Licensed for non-commercial use, so not published here.
 ml/data/
+# Trained models (rebuild with: uv run python -m ml.save). The shared copies live in S3.
+ml/models/

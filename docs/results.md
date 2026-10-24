@@ -296,3 +296,14 @@ The chosen model is the cross-validation winner: weighted Logistic Regression wi
 - Accuracy drops slightly (0.801 to 0.793), because the weighted model stops leaning on the biggest class. Macro F1 is what was chosen on.
 - Neutral is the hardest label: many neutral tweets are questions that use the same words as complaints.
 - XGBoost comes much closer here than on the tickets, and the whole tuning run took 1.5 minutes against 5.5, since tweets are short and give far fewer word features.
+
+## Saved models (Stage 7)
+
+Measured on 2026-10-24 with `uv run python -m ml.save --upload`, which trains both chosen models in about 4 seconds and uploads them to `s3://support-ai-docs-phanindra02/models/`.
+
+| Model | Version | Test macro F1 | model.joblib |
+|---|---|---|---|
+| priority | v1 | 0.709 | 2.4 MB |
+| sentiment | v1 | 0.743 | 1.1 MB |
+
+- Each model is trained on its training set only, so the test score in its `metadata.json` belongs to that exact file.
