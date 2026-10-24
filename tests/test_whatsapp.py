@@ -659,5 +659,5 @@ def test_a_ticket_opened_on_whatsapp_queues_one_priority_prediction(
 
     # The second message joins the ticket, which already has its prediction coming.
     assert [(job.func_name, job.args) for job in test_queue.get_jobs()] == [
-        ("worker.jobs.predict_priority", (1,))
+        ("worker.jobs.triage_ticket", (1,))
     ]

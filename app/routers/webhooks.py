@@ -28,7 +28,7 @@ from app.cache import RedisDep, clear_cache
 from app.config import settings
 from app.database import SessionDep
 from app.models import Customer, Message, MessageSender, Ticket, TicketStatus
-from app.queue import QueueDep, queue_priority_prediction
+from app.queue import QueueDep, queue_triage
 from app.routers.tickets import STATS_KEY, get_or_create_customer
 from app.schemas import ErrorResponse, WhatsAppMessage
 
@@ -257,5 +257,5 @@ def receive_whatsapp_message(
     # <Response/> tells Twilio there's nothing to send.
     if is_new:
         reply.message(confirmation(ticket.id))
-        queue_priority_prediction(queue, ticket.id)
+        queue_triage(queue, ticket.id)
     return twiml(reply)

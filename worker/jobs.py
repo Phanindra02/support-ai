@@ -9,6 +9,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.alerts import get_http_client, send_urgent_alert
 from app.bot import start_new_docs_version
 from app.cache import clear_cache, get_redis
 from app.config import settings
@@ -16,6 +17,7 @@ from app.database import SessionLocal
 from app.embeddings import get_embeddings
 from app.models import Chunk, Document, Message, Ticket, TicketPriority
 from app.routers.tickets import STATS_KEY
+from app.schemas import UrgentAlert
 from app.storage import get_s3_client, read_text
 
 logger = logging.getLogger(__name__)
@@ -100,45 +102,85 @@ def embed_document(document_id: int) -> int:
 MODEL_SERVICE_TIMEOUT_SECONDS = 5
 # The longest text the model service takes (ml/service.py).
 MAX_PREDICT_CHARS = 10_000
+# A customer is very negative when the sentiment model scores "negative" at least this high.
+# On the test tweets, 99.1% of messages at 0.8 or more were negative, and they were a fifth of
+# all messages, so the team hears about the angriest customers, not every complaint
+# (docs/results.md).
+VERY_NEGATIVE = 0.8
 
 
-def ticket_text(db: Session, ticket: Ticket) -> str:
-    """The subject, a blank line, then the customer's first message: how the training tickets read."""
+def first_message(db: Session, ticket: Ticket) -> str:
     first = db.scalar(
         select(Message)
         .where(Message.ticket_id == ticket.id)
         .order_by(Message.created_at, Message.id)
         .limit(1)
     )
-    body = first.body if first is not None else ""
-    return f"{ticket.subject}\n\n{body}".strip()[:MAX_PREDICT_CHARS]
+    return first.body if first is not None else ""
 
 
-def set_predicted_priority(
-    db: Session, client: httpx.Client, ticket_id: int
+def ask_model(client: httpx.Client, name: str, text: str) -> dict:
+    """The model service's prediction: the label and each label's score."""
+    response = client.post(
+        f"{settings.model_service_url}/predict/{name}", json={"text": text[:MAX_PREDICT_CHARS]}
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def alert_reason(priority: dict, sentiment: dict | None) -> str | None:
+    """Why the team should hear about the ticket now, for the Slack message, or None."""
+    reasons = []
+    if priority["label"] == TicketPriority.high:
+        reasons.append(f"high priority ({priority['scores']['high']:.0%} sure)")
+    negative = sentiment["scores"].get("negative", 0) if sentiment else 0
+    if negative >= VERY_NEGATIVE:
+        reasons.append(f"a very negative customer ({negative:.0%} sure)")
+    return "the model: " + " and ".join(reasons) if reasons else None
+
+
+def triage(
+    db: Session, models: httpx.Client, alerts: httpx.Client, ticket_id: int
 ) -> TicketPriority | None:
-    """Ask the model service for the ticket's priority, and save it on the ticket.
+    """Predict the ticket's priority and the customer's mood, save the priority, and alert.
 
     The job runs seconds after the ticket opens, before an agent could have set a priority.
-    Raises if the model service fails, so the ticket keeps its priority and RQ tries again.
+    Both predictions come before anything is saved, so if either call fails, nothing has
+    changed and no alert has gone out when RQ tries again.
     """
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
-        logger.warning("Ticket %s doesn't exist, so it has no priority to predict", ticket_id)
+        logger.warning("Ticket %s doesn't exist, so there's nothing to triage", ticket_id)
         return None
-    response = client.post(
-        f"{settings.model_service_url}/predict/priority", json={"text": ticket_text(db, ticket)}
-    )
-    response.raise_for_status()
-    ticket.priority = TicketPriority(response.json()["label"])
+    message = first_message(db, ticket)
+    # The subject, a blank line, then the first message: how the training tickets read.
+    priority = ask_model(models, "priority", f"{ticket.subject}\n\n{message}".strip())
+    # The mood is in the customer's own words, not the subject.
+    sentiment = ask_model(models, "sentiment", message) if message.strip() else None
+    ticket.priority = TicketPriority(priority["label"])
     db.commit()
+
+    reason = alert_reason(priority, sentiment)
+    if reason is not None:
+        alert = UrgentAlert(
+            ticket_id=ticket.id,
+            subject=ticket.subject,
+            customer_name=ticket.customer.name,
+            status=ticket.status,
+            priority=ticket.priority,
+            created_at=ticket.created_at,
+            # The Slack message says "Marked urgent by ...", so the n8n workflow stays as it is.
+            marked_urgent_by=reason,
+        )
+        # Never raises: a failed alert is logged, and the saved priority stays.
+        send_urgent_alert(alerts, alert)
     return ticket.priority
 
 
-def predict_priority(ticket_id: int) -> str | None:
+def triage_ticket(ticket_id: int) -> str | None:
     """The job the API queues for each new ticket. Returns the priority it set."""
-    with SessionLocal() as db, httpx.Client(timeout=MODEL_SERVICE_TIMEOUT_SECONDS) as client:
-        priority = set_predicted_priority(db, client, ticket_id)
+    with SessionLocal() as db, httpx.Client(timeout=MODEL_SERVICE_TIMEOUT_SECONDS) as models:
+        priority = triage(db, models, get_http_client(), ticket_id)
     if priority is not None:
         # The backlog counts by priority just changed.
         clear_cache(get_redis(), STATS_KEY)
