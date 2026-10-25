@@ -203,7 +203,7 @@ EKS bills by the hour. Get a yes before creating the cluster, and delete it as s
 - [x] Install the AWS Load Balancer Controller and create an HTTPS Ingress with a free ACM certificate. The chart's Ingress, on with `values-eks.yaml`, for `support.mysolospark.com`. The certificate is validated through a CNAME at Cloudflare, and the controller finds it by host name, so the account's number stays out of the repo. HTTP redirects to HTTPS, and the API trusts forwarded headers only from the VPC.
 - [x] **[You]** Point the domain and the Twilio webhook at the new Ingress. Cloudflare's `support` record became a CNAME for the load balancer, DNS only, and `https://support.mysolospark.com/health` answered 200 from the cluster's API pods. Twilio's webhook URL didn't change.
 - [x] Update CI to deploy with `helm upgrade` on merges to main. The `deploy-eks` job, run only while the repository variable `EKS_CLUSTER` is set, so it's skipped once the cluster is deleted. CI's role may look up only this cluster in AWS, and its access entry lets it change only the `default` namespace (`infra/k8s/README.md`).
-- [ ] Load test the API with Locust, watch the autoscaler add pods, and record the numbers in `docs/results.md`.
+- [x] Load test the API with Locust, watch the autoscaler add pods, and record the numbers in `docs/results.md`. `scripts/locustfile.py`, 200 simulated agents for 8 minutes: about 182 requests a second, a 34 ms median and 130 ms at the 95th percentile from home, and 1 error in 87,244. The API went from 2 pods to 6 within about a minute.
 - [ ] **[You]** Record a demo, then run `eksctl delete cluster` so it stops billing.
 - [ ] **[You]** Point the domain and Twilio webhook back to EC2, the always-on version.
 

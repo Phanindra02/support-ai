@@ -365,3 +365,14 @@ Measured on 2026-10-25 on the EKS cluster from `infra/k8s/eks-cluster.yaml`: Kub
 - `kubectl top pods`, a few minutes later with no traffic: the API pods 169 and 207 MB, the model service 146 MB, the worker 79 MB, and Redis 6 MB. About the same as on the EC2 server and minikube.
 - From an API pod, without writing anything: it read RDS, with `DATABASE_URL` and the JWT key from Parameter Store, and got a prediction from the model service through its Service. No AWS keys were in its environment, only Pod Identity's credentials address. The model service's role was refused Parameter Store (`AccessDeniedException`).
 - The load balancer for the Ingress was reconciled about 10 seconds after `helm upgrade`, and answered a couple of minutes later, once its DNS name resolved. Asked for `support.mysolospark.com` at its address (before the domain moved), HTTP gave a 301 to HTTPS, and HTTPS gave `/health`'s 200 with Amazon's certificate for the domain, valid until May 2027. Six requests from the Mac took 0.09 to 0.18 seconds each, including a new TLS connection every time.
+
+## Load test and autoscaling on EKS (Stage 8)
+
+Measured on 2026-10-25 against `https://support.mysolospark.com` on the EKS cluster (two t4g.medium nodes, CI's images for `sha-8c9f97b`), with Locust 2.47 on the developer's Mac at home, so every time includes the round trip from home to us-east-2.
+
+**Method.** `scripts/locustfile.py`: 200 simulated agents, added 5 a second, for 8 minutes. Each logs in once, then about once a second reads `/stats` (3 in 8), `/tickets` (3 in 8), `/tickets?status=open` (1 in 8), or `/health` (1 in 8). The API's per-address rate limit was raised to 100,000 a minute for the test, since every request came from one address, then put back to 60. The autoscaler was read every 15 seconds with `kubectl get hpa api`.
+
+- **Throughput:** 87,244 requests, about 182 a second.
+- **Latency, all requests:** median 34 ms, 95th percentile 130 ms, 99th 420 ms, slowest 1.7 s. `/tickets`, which reads Postgres every time, was 36 / 140 / 400 ms. `/stats`, mostly from the Redis cache, 33 / 130 / 380 ms. Logging in was 890 ms at the median, because hashing a password is slow on purpose.
+- **Errors:** 1 of 87,244, a 502 on `/stats` 9 seconds into the scale-up, while the load balancer was adding the new pods.
+- **Autoscaling:** the API started at its minimum of 2 pods. 30 seconds after the load began, their CPU was at 212% of the 250m request, and the HPA asked for 4 pods. 30 seconds later it was at 309% and the HPA went to 6, its maximum. All 6 were ready within about a minute of the load starting. For the remaining 7 minutes, CPU held at 74% to 78% of the request, just over the 70% target, so 6 pods were about right for 182 requests a second. More load would need a higher `maxReplicas`, and past about 8 API pods, a third node.
