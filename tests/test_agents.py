@@ -12,6 +12,7 @@ from app.routers.tickets import get_or_create_customer
 # Lambda's shared secret (tests/test_whatsapp.py and tests/test_document_processed.py).
 PUBLIC = {
     ("GET", "/"),
+    ("GET", "/health"),
     ("POST", "/auth/token"),
     ("POST", "/webhooks/twilio"),
     ("POST", "/webhooks/document-processed"),

@@ -50,6 +50,14 @@ def root():
     return {"message": "Support API is running"}
 
 
+# Kubernetes asks each API pod this every few seconds (Stage 8). It touches neither the
+# database nor Redis, so an outage there doesn't get every pod restarted, where restarting
+# wouldn't help. It's on app, not api, so the checks don't count against the rate limit.
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 api.include_router(auth.router)
 api.include_router(agents.router)
 api.include_router(tickets.router)

@@ -112,12 +112,19 @@ def test_the_docs_are_not_limited(client, low_limit):
     assert client.get("/openapi.json").status_code == 200
 
 
+def test_the_health_check_is_not_limited(client, low_limit):
+    # Kubernetes checks every few seconds, and a 429 would look like a dead pod.
+    for _ in range(LIMIT + 1):
+        client.get("/tickets")
+    assert client.get("/health").status_code == 200
+
+
 def test_the_docs_list_the_429_for_every_endpoint_except_webhooks(client):
     paths = client.get("/openapi.json").json()["paths"]
     for path, methods in paths.items():
         for method, operation in methods.items():
-            # Webhooks skip the IP limit. app/routers/webhooks.py explains why.
-            expected = not path.startswith("/webhooks/")
+            # Webhooks skip the IP limit. app/routers/webhooks.py explains why. So does /health.
+            expected = not path.startswith("/webhooks/") and path != "/health"
             assert ("429" in operation["responses"]) == expected, f"{method.upper()} {path}"
 
 
