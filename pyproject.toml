@@ -31,6 +31,7 @@ dependencies = [
 dev = [
     "faker>=40.43.0",
     "httpx2>=2.14.0",
+    "locust>=2.47.0",
     "moto[s3]>=5.2.4",
     "pandas>=3.0.6",
     "pytest>=9.1.1",
