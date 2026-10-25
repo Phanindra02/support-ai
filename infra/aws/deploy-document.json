@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.2",
-  "description": "Deploy one commit of support-ai on the EC2 server: its code and its image",
+  "description": "Deploy one commit of support-ai on the EC2 server: its code and its images",
   "parameters": {
     "commit": {
       "type": "String",
@@ -22,7 +22,7 @@
           "as_ubuntu() { sudo -u ubuntu -H \"$@\"; }",
           "as_ubuntu git fetch --quiet origin main",
           "as_ubuntu git merge --quiet --ff-only \"$COMMIT\"",
-          "as_ubuntu sed -i -E \"s|^(API_IMAGE=.*):[^:/]*\\$|\\1:sha-$SHORT|\" .env",
+          "as_ubuntu sed -i -E \"s|^((API|MODEL)_IMAGE=.*):[^:/]*\\$|\\1:sha-$SHORT|\" .env",
           "as_ubuntu docker compose pull --quiet",
           "as_ubuntu docker compose up -d --no-build",
           "as_ubuntu docker compose ps --format '{{.Name}} {{.Image}} {{.Status}}'"

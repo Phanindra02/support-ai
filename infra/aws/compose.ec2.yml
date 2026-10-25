@@ -14,8 +14,6 @@ services:
       # !reset drops docker-compose.yml's URL for the postgres container. A variable would
       # win over Parameter Store, so it must not be set at all.
       DATABASE_URL: !reset null
-      # The model service is off on the server for now (below), so no prediction is queued.
-      MODEL_SERVICE_URL: !reset null
 
   migrate:
     environment:
@@ -29,17 +27,21 @@ services:
     environment:
       PARAMETER_STORE_PATH: /support-ai
       DATABASE_URL: !reset null
-      MODEL_SERVICE_URL: !reset null
 
   # A service with a profile only starts when that profile is asked for, so `docker compose up`
   # leaves Postgres out on the server.
   postgres:
     profiles: [local-postgres]
 
-  # Off on the server until CI publishes its image to ECR and the server's role may read
-  # models/ in S3. Until then, the deploy's pull would look for an image only the Mac has.
+  # The server has no saved models of its own, so the service downloads them from S3 when it
+  # first starts, with the instance role, into a volume that keeps them for the next container.
+  # The bucket's name isn't a secret, and the service reads none of Parameter Store.
   model:
-    profiles: [model-service]
+    image: ${MODEL_IMAGE:?Set MODEL_IMAGE in .env}
+    environment:
+      S3_BUCKET: support-ai-docs-phanindra02
+    volumes: !override
+      - model-cache:/models
 
   # Answers on ports 80 and 443 for the domain, with a certificate it gets and renews by
   # itself, and passes each request on to the API (infra/aws/Caddyfile).
@@ -63,3 +65,4 @@ services:
 volumes:
   caddy-data:
   caddy-config:
+  model-cache:

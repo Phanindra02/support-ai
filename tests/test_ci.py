@@ -94,14 +94,14 @@ def test_the_image_is_built_on_arm(jobs):
     assert jobs["image"]["runs-on"].endswith("-arm")
 
 
-def test_only_pushes_to_main_log_in_to_aws_and_publish_the_image(jobs):
+def test_only_pushes_to_main_log_in_to_aws_and_publish_the_images(jobs):
     publishing = [
         step
         for step in jobs["image"]["steps"]
         if step.get("with", {}).get("push") is True
         or step.get("uses", "").startswith("aws-actions/")
     ]
-    assert len(publishing) == 3  # Log in to AWS, log in to ECR, push.
+    assert len(publishing) == 4  # Log in to AWS, log in to ECR, push each image.
     for step in publishing:
         assert step["if"] == "github.ref == 'refs/heads/main'"
 
@@ -131,13 +131,16 @@ def test_the_account_number_is_masked_in_the_public_logs(jobs):
     assert aws_login(jobs)["mask-aws-account-id"] is True
 
 
-def test_the_image_goes_to_the_ecr_repository_the_ci_role_may_push_to(jobs):
-    [meta] = [s for s in jobs["image"]["steps"] if "metadata-action" in s.get("uses", "")]
-    assert meta["with"]["images"] == "${{ steps.ecr.outputs.registry }}/support-ai-api"
+def test_the_images_go_to_the_ecr_repositories_the_ci_role_may_push_to(jobs):
+    metas = [s for s in jobs["image"]["steps"] if "metadata-action" in s.get("uses", "")]
+    names = [
+        meta["with"]["images"].removeprefix("${{ steps.ecr.outputs.registry }}/") for meta in metas
+    ]
+    assert names == ["support-ai-api", "support-ai-model"]
     policy = json.loads((PROJECT_ROOT / "infra" / "aws" / "github-ci-permissions.json").read_text())
-    [push] = [s for s in policy["Statement"] if s["Sid"] == "PushTheApiImage"]
+    [push] = [s for s in policy["Statement"] if s["Sid"] == "PushTheImages"]
     region = aws_login(jobs)["aws-region"]
-    assert push["Resource"] == f"arn:aws:ecr:{region}:ACCOUNT_ID:repository/support-ai-api"
+    assert push["Resource"] == [f"arn:aws:ecr:{region}:ACCOUNT_ID:repository/{n}" for n in names]
 
 
 def test_nothing_is_published_to_github_container_registry_any_more():
@@ -149,14 +152,23 @@ def test_no_build_args_go_into_the_image(jobs):
     for step in image_steps(jobs):
         assert "build-args" not in step["with"]
         assert "secrets" not in step["with"]
-    dockerfile = (PROJECT_ROOT / "infra" / "api.Dockerfile").read_text()
-    assert not re.search(r"^\s*ARG\b", dockerfile, re.MULTILINE)
+    for name in ["api.Dockerfile", "model.Dockerfile"]:
+        dockerfile = (PROJECT_ROOT / "infra" / name).read_text()
+        assert not re.search(r"^\s*ARG\b", dockerfile, re.MULTILINE)
 
 
-def test_the_published_image_is_built_from_the_dockerfile(jobs):
+def test_each_image_is_built_and_published_from_its_dockerfile(jobs):
+    # Built once to check it, then again to push it, which comes from the cache.
+    files = [step["with"]["file"] for step in image_steps(jobs)]
+    assert sorted(files) == ["infra/api.Dockerfile"] * 2 + ["infra/model.Dockerfile"] * 2
     for step in image_steps(jobs):
-        assert step["with"]["file"] == "infra/api.Dockerfile"
         assert step["with"]["context"] == "."
+
+
+def test_the_two_images_keep_separate_build_caches(jobs):
+    for step in image_steps(jobs):
+        scoped = "scope=model" in step["with"]["cache-from"]
+        assert scoped == (step["with"]["file"] == "infra/model.Dockerfile")
 
 
 # main's protection rules, which infra/github/README.md applies with gh api.

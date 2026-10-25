@@ -1,5 +1,5 @@
-# Lints and tests every push, to any branch, then builds the API's image. Pushes to main also
-# publish the image to Amazon ECR, where EC2 pulls it from.
+# Lints and tests every push, to any branch, then builds the API's and the model service's
+# images. Pushes to main also publish both to Amazon ECR, where EC2 pulls them from.
 name: CI
 
 on:
@@ -114,6 +114,25 @@ jobs:
             http://localhost:8000/
           docker rm -f api
 
+      # The model service's image (infra/model.Dockerfile). Its own cache scope, so the two
+      # builds don't overwrite each other's cached layers.
+      - name: Build the model image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/model.Dockerfile
+          load: true
+          tags: support-ai-model:ci
+          cache-from: type=gha,scope=model
+          cache-to: type=gha,mode=max,scope=model
+
+      # CI has no saved models, and the service won't start without them, so this checks the
+      # user and that every module the service needs is in the image.
+      - name: Check that the model image has its code, and doesn't run as root
+        run: |
+          test "$(docker run --rm support-ai-model:ci id -u)" != 0
+          docker run --rm support-ai-model:ci python -c "import ml.service"
+
       # From here on, only for pushes to main, which is what a merged pull request is. The
       # role's trust policy (infra/aws/github-ci-trust-policy.json) refuses every other branch,
       # so these steps would fail anywhere else anyway. No AWS keys are stored in GitHub.
@@ -158,6 +177,29 @@ jobs:
           cache-from: type=gha
           # Without this, buildx adds a build record that ECR lists as a second, untagged image
           # beside each real one. A plain image keeps the registry to one image per build.
+          provenance: false
+
+      # The same two tags for the model image, so one commit names both images.
+      - name: Choose the model image's tags and labels
+        if: github.ref == 'refs/heads/main'
+        id: model-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.ecr.outputs.registry }}/support-ai-model
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      - name: Push the model image
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/model.Dockerfile
+          push: true
+          tags: ${{ steps.model-meta.outputs.tags }}
+          labels: ${{ steps.model-meta.outputs.labels }}
+          cache-from: type=gha,scope=model
           provenance: false
 
   # Puts each new image on the EC2 server. CI asks AWS Systems Manager to run the deploy

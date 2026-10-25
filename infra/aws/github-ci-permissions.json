@@ -8,7 +8,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "PushTheApiImage",
+      "Sid": "PushTheImages",
       "Effect": "Allow",
       "Action": [
         "ecr:BatchCheckLayerAvailability",
@@ -18,7 +18,10 @@
         "ecr:PutImage",
         "ecr:UploadLayerPart"
       ],
-      "Resource": "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+      "Resource": [
+        "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api",
+        "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-model"
+      ]
     },
     {
       "Sid": "RunTheDeployOnTheServer",

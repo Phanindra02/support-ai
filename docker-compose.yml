@@ -74,7 +74,8 @@ services:
     build:
       context: .
       dockerfile: infra/model.Dockerfile
-    image: support-ai-model
+    # Like API_IMAGE: built here on the Mac, and CI's image from ECR on EC2.
+    image: ${MODEL_IMAGE:-support-ai-model}
     # The models ml.save wrote on the Mac, so the container needs no AWS login to start.
     # Without them, it would download them from S3_BUCKET.
     volumes:

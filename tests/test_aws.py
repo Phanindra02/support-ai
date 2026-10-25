@@ -17,6 +17,13 @@ from sqlalchemy import make_url
 from app.config import PROJECT_ROOT, Settings
 from app.schemas import TEXT_KEY_PATTERN
 from app.storage import UPLOAD_PREFIX
+from ml.registry import S3_PREFIX
+
+# Both of the project's images: the API's and the model service's.
+IMAGE_REPOSITORIES = [
+    "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api",
+    "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-model",
+]
 
 AWS = PROJECT_ROOT / "infra" / "aws"
 BUCKET = "support-ai-docs-phanindra02"
@@ -104,11 +111,11 @@ def test_only_pushes_to_main_of_this_repo_can_use_the_ci_role(trust_policy):
     }
 
 
-def test_the_ci_role_can_only_log_in_to_ecr_and_push_one_image(ci_permissions):
+def test_the_ci_role_can_only_log_in_to_ecr_and_push_the_two_images(ci_permissions):
     statements = {statement["Sid"]: statement for statement in ci_permissions["Statement"]}
     assert set(statements) == {
         "LogInToEcr",
-        "PushTheApiImage",
+        "PushTheImages",
         "RunTheDeployOnTheServer",
         "ReadTheDeploysResult",
     }
@@ -116,7 +123,7 @@ def test_the_ci_role_can_only_log_in_to_ecr_and_push_one_image(ci_permissions):
     # GetAuthorizationToken can't be limited to a repository, so it's the only "*".
     assert statements["LogInToEcr"]["Action"] == "ecr:GetAuthorizationToken"
     assert statements["LogInToEcr"]["Resource"] == "*"
-    push = statements["PushTheApiImage"]
+    push = statements["PushTheImages"]
     assert set(push["Action"]) == {
         "ecr:BatchCheckLayerAvailability",
         "ecr:BatchGetImage",
@@ -125,7 +132,7 @@ def test_the_ci_role_can_only_log_in_to_ecr_and_push_one_image(ci_permissions):
         "ecr:PutImage",
         "ecr:UploadLayerPart",
     }
-    assert push["Resource"] == "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+    assert push["Resource"] == IMAGE_REPOSITORIES
 
 
 def test_no_aws_account_number_is_committed():
@@ -162,6 +169,13 @@ def test_the_server_can_only_add_uploads_to_the_bucket(server_permissions):
     assert save["Resource"] == f"arn:aws:s3:::{BUCKET}/{UPLOAD_PREFIX}*"
 
 
+def test_the_model_service_can_only_read_the_saved_models(server_permissions):
+    read = server_permissions["ReadTheModels"]
+    assert read["Action"] == "s3:GetObject"
+    # The same prefix ml/save.py uploads under and the service downloads from.
+    assert read["Resource"] == f"arn:aws:s3:::{BUCKET}/{S3_PREFIX}*"
+
+
 def test_the_worker_can_only_read_the_text_the_lambda_saved(server_permissions):
     # Reading, under text/ only: not the uploaded PDFs, and no way to change anything.
     read = server_permissions["ReadDocumentText"]
@@ -171,22 +185,23 @@ def test_the_worker_can_only_read_the_text_the_lambda_saved(server_permissions):
     assert TEXT_KEY_PATTERN.startswith("^text/")
 
 
-def test_the_server_can_pull_the_api_image_but_never_push(server_permissions):
+def test_the_server_can_pull_both_images_but_never_push(server_permissions):
     assert set(server_permissions) == {
         "SaveUploadedDocs",
         "ReadDocumentText",
+        "ReadTheModels",
         "LogInToEcr",
-        "PullTheApiImage",
+        "PullTheImages",
         "LoadTheAppSecrets",
         "TalkToSystemsManager",
     }
-    pull = server_permissions["PullTheApiImage"]
+    pull = server_permissions["PullTheImages"]
     assert set(pull["Action"]) == {
         "ecr:BatchCheckLayerAvailability",
         "ecr:BatchGetImage",
         "ecr:GetDownloadUrlForLayer",
     }
-    assert pull["Resource"] == "arn:aws:ecr:us-east-2:ACCOUNT_ID:repository/support-ai-api"
+    assert pull["Resource"] == IMAGE_REPOSITORIES
     assert server_permissions["LogInToEcr"]["Action"] == "ecr:GetAuthorizationToken"
 
 
@@ -228,10 +243,11 @@ def test_first_boot_restarts_docker_after_installing_it():
 
 
 class IgnoreTagsLoader(yaml.SafeLoader):
-    """safe_load, but compose's !reset tag reads as None instead of failing."""
+    """safe_load, but compose's !reset reads as None, and !override as the value it sets."""
 
 
 IgnoreTagsLoader.add_constructor("!reset", lambda loader, node: None)
+IgnoreTagsLoader.add_constructor("!override", lambda loader, node: loader.construct_sequence(node))
 
 
 @pytest.fixture(scope="module")
