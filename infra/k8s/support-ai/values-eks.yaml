@@ -18,3 +18,16 @@ settings:
   # n8n stays on the EC2 server, out of the cluster's reach, and Parameter Store has no
   # N8N_WEBHOOK_SECRET, so urgent alerts are skipped and logged. null removes minikube's URL.
   N8N_WEBHOOK_URL: null
+
+api:
+  # The load balancer reaches the pods from inside the VPC.
+  forwardedAllowIps: 172.31.0.0/16
+
+ingress:
+  enabled: true
+  host: support.mysolospark.com
+  # The default VPC's public subnets, as in eks-cluster.yaml.
+  subnets:
+    - subnet-021a9bfe488217957
+    - subnet-0825a60aecdc57b09
+    - subnet-0fd58ce1b818e69dc

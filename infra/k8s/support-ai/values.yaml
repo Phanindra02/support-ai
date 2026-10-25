@@ -19,6 +19,15 @@ api:
   # The autoscaler's range for API pods.
   minReplicas: 2
   maxReplicas: 6
+  # The proxy addresses whose forwarded headers uvicorn trusts. None on minikube.
+  forwardedAllowIps: ""
+
+# An HTTPS load balancer in front of the API, on EKS (templates/ingress.yaml). minikube has no
+# AWS load balancer, so it's off here.
+ingress:
+  enabled: false
+  host: ""
+  subnets: []
 
 model:
   # A folder on the node with the saved models, mounted into the pod. minikube start mounts

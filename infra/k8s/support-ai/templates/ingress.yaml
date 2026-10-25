@@ -1,0 +1,37 @@
+{{- if .Values.ingress.enabled }}
+# The way in from the internet, on EKS. The AWS Load Balancer Controller sees this Ingress and
+# makes an Application Load Balancer for it: HTTPS on 443 with the ACM certificate for the host,
+# and HTTP on 80 redirected to HTTPS. The load balancer sends requests straight to the API
+# pods' addresses (target-type ip), and checks each pod's /health, as the readiness probe does.
+#
+# The certificate isn't named here: the controller finds the issued ACM certificate for the
+# host itself, so the AWS account's number stays out of the repo.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    # The public subnets, named, so they need no tags for the controller to find them.
+    alb.ingress.kubernetes.io/subnets: {{ join "," .Values.ingress.subnets }}
+spec:
+  ingressClassName: alb
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+{{- end }}

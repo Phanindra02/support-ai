@@ -28,6 +28,15 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          {{- with .Values.api.forwardedAllowIps }}
+          # uvicorn's, not the app's: whose X-Forwarded-For and -Proto headers to trust. Behind
+          # the load balancer, the Twilio signature needs the https:// URL, and the rate limit
+          # the customer's real IP. Only the load balancer's addresses, so no one else can make
+          # up an IP for the rate limit.
+          env:
+            - name: FORWARDED_ALLOW_IPS
+              value: {{ . | quote }}
+          {{- end }}
           # Every setting, as environment variables, the way .env gives them to compose.
           envFrom:
             - configMapRef:
