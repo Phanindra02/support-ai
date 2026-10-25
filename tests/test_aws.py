@@ -118,6 +118,7 @@ def test_the_ci_role_can_only_log_in_to_ecr_and_push_the_two_images(ci_permissio
         "PushTheImages",
         "RunTheDeployOnTheServer",
         "ReadTheDeploysResult",
+        "FindTheEksCluster",
     }
     assert all(statement["Effect"] == "Allow" for statement in statements.values())
     # GetAuthorizationToken can't be limited to a repository, so it's the only "*".

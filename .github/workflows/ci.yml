@@ -249,3 +249,49 @@ jobs:
         run: |
           curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 3 \
             https://support.mysolospark.com/
+
+  # While the EKS cluster exists (Stage 8), each merge also goes there, with the same images
+  # and the chart in infra/k8s/. EKS_CLUSTER, a repository variable, is set only while the
+  # cluster is up (infra/k8s/README.md), so once it's deleted this job is skipped, not failed.
+  deploy-eks:
+    needs: image
+    if: github.ref == 'refs/heads/main' && vars.EKS_CLUSTER != ''
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-eks
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLUSTER: ${{ vars.EKS_CLUSTER }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to AWS as the CI role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-2
+          mask-aws-account-id: true
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.1
+
+      # The kubeconfig asks AWS for a token as the CI role each time. The cluster's access entry
+      # for that role lets it change only the default namespace.
+      - name: Point Helm at the cluster
+        run: aws eks update-kubeconfig --region us-east-2 --name "$CLUSTER"
+
+      # The image job pushed sha-<first 7 of this commit>. The migrations run first, as a hook,
+      # and --wait fails the job if the new pods never become ready. The old pods keep serving
+      # until they do.
+      - name: Deploy this commit with Helm
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-2.amazonaws.com"
+          helm upgrade --install support-ai infra/k8s/support-ai \
+            -f infra/k8s/support-ai/values-eks.yaml \
+            --set "image.api=$registry/support-ai-api,image.model=$registry/support-ai-model,image.tag=sha-${GITHUB_SHA::7}" \
+            --wait --timeout 10m
+          kubectl get pods

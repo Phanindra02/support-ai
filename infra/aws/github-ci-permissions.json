@@ -37,6 +37,12 @@
       "Effect": "Allow",
       "Action": "ssm:GetCommandInvocation",
       "Resource": "*"
+    },
+    {
+      "Sid": "FindTheEksCluster",
+      "Effect": "Allow",
+      "Action": "eks:DescribeCluster",
+      "Resource": "arn:aws:eks:us-east-2:ACCOUNT_ID:cluster/support-ai"
     }
   ]
 }

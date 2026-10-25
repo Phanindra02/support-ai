@@ -130,11 +130,37 @@ After `helm upgrade` with `values-eks.yaml`, `kubectl get ingress api` shows the
 
 Moving the domain means changing Cloudflare's `support` record from the EC2 server's IP to a CNAME for the load balancer's address, DNS only. Twilio's webhook URL stays the same. Moving back is the reverse.
 
-### Deleting it
+### Deploying from CI
 
-In this order. Point the domain back at the EC2 server first. Then the chart's resources, so the load balancer and Redis's EBS volume, which Kubernetes made in AWS, are deleted with them. Then RDS's rule, because a security group can't be deleted while another one's rule names it.
+While the cluster exists, CI's `deploy-eks` job runs `helm upgrade` with `values-eks.yaml` after each merge to `main`, with that commit's images, as the `deploy` job does on the server. It runs only while the repository variable `EKS_CLUSTER` is set, so once the cluster is deleted it's skipped rather than failing.
+
+CI logs in to AWS as its existing role, through GitHub's OIDC token, so no AWS keys or kubeconfig are stored in GitHub. Two permissions are added for it:
+
+- **In AWS:** `eks:DescribeCluster` on this cluster only (`FindTheEksCluster` in `infra/aws/github-ci-permissions.json`), which `aws eks update-kubeconfig` needs.
+- **In the cluster:** an EKS access entry maps the role to AWS's `AmazonEKSEditPolicy`, scoped to the `default` namespace. It can create and change what the chart makes there, but can't touch `kube-system`, other namespaces, or anyone's permissions. Access entries replace editing the `aws-auth` ConfigMap, and belong to the cluster, so a new cluster needs them again.
+
+Once per cluster, after creating it:
 
 ```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+INSTANCE_ID=$(gh variable get SERVER_INSTANCE_ID)
+CI_ROLE_ARN=$(gh variable get AWS_ROLE_ARN)
+aws iam put-role-policy --role-name support-ai-ci-push-image --policy-name push-api-image \
+  --policy-document "$(sed -e "s/ACCOUNT_ID/${ACCOUNT_ID}/" -e "s/INSTANCE_ID/${INSTANCE_ID}/" infra/aws/github-ci-permissions.json)"
+aws eks create-access-entry --region us-east-2 --cluster-name support-ai --principal-arn "${CI_ROLE_ARN}"
+aws eks associate-access-policy --region us-east-2 --cluster-name support-ai --principal-arn "${CI_ROLE_ARN}" \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy \
+  --access-scope type=namespace,namespaces=default
+gh variable set EKS_CLUSTER --body support-ai
+```
+
+### Deleting it
+
+In this order. Turn off CI's deploys to the cluster, and point the domain back at the EC2 server, first. Then the chart's resources, so the load balancer and Redis's EBS volume, which Kubernetes made in AWS, are deleted with them. Then RDS's rule, because a security group can't be deleted while another one's rule names it.
+
+```bash
+gh variable delete EKS_CLUSTER
+# Now Cloudflare: the support record back to an A record for 18.117.40.156, DNS only.
 helm uninstall support-ai
 CLUSTER_SG=$(aws eks describe-cluster --region us-east-2 --name support-ai --query cluster.resourcesVpcConfig.clusterSecurityGroupId --output text)
 aws ec2 revoke-security-group-ingress --region us-east-2 --group-id sg-05e1413ca647a380c --protocol tcp --port 5432 --source-group "$CLUSTER_SG"
