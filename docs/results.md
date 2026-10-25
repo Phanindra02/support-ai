@@ -316,6 +316,14 @@ Measured on 2026-10-24 with `docker image ls support-ai-model` after `docker com
 - It installs only the `service` dependency group, without the API's packages, and copies only four files from `ml/`.
 - Started with `docker compose up -d model`, it was healthy within a few seconds and answered `/predict/priority` from inside the container.
 
+## Model service on the server (Stage 7)
+
+Measured on 2026-10-25 on the t4g.small server (2 GB), a minute after the deploy of PR #32 started the model container from ECR. Read with `docker stats --no-stream` and `free -m` through SSM.
+
+- The container was healthy within a minute, after downloading both models from S3 into its `model-cache` volume. It used 149 MB, less than the 268 MB it used idle on the Mac.
+- With it running, the server had 736 MB available, down from 817 MB the day before (the stack also restarted, so not all of the difference is the model).
+- From inside the container, "Our production server is down and customers cannot log in" came back high priority (0.93), and "This is the third time I am asking, absolutely useless service" came back negative (0.66). Both from v1.
+
 ## Priority prediction job (Stage 7)
 
 Measured on 2026-10-24 with the compose stack on the Mac (`docker compose up -d --build api worker model`). From the API container, a ticket was saved ("Production outage" / "Our whole site is down and no customer can pay...") and its prediction queued with `queue_priority_prediction`.
