@@ -22,7 +22,7 @@
           "as_ubuntu() { sudo -u ubuntu -H \"$@\"; }",
           "as_ubuntu git fetch --quiet origin main",
           "as_ubuntu git merge --quiet --ff-only \"$COMMIT\"",
-          "as_ubuntu sed -i -E \"s|^((API|MODEL)_IMAGE=.*):[^:/]*\\$|\\1:sha-$SHORT|\" .env",
+          "as_ubuntu sed -i -E \"s#^((API|MODEL)_IMAGE=.*):[^:/]*\\$#\\1:sha-$SHORT#\" .env",
           "as_ubuntu docker compose pull --quiet",
           "as_ubuntu docker compose up -d --no-build",
           "as_ubuntu docker compose ps --format '{{.Name}} {{.Image}} {{.Status}}'"
