@@ -24,8 +24,8 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: worker
-          image: support-ai-api
-          imagePullPolicy: IfNotPresent
+          image: "{{ .Values.image.api }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python", "-m", "worker.main"]
           envFrom:
             - configMapRef:

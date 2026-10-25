@@ -1,12 +1,19 @@
 # Brings the database up to the latest migration, then exits, like compose's migrate service.
 # A Job runs a pod until it succeeds, rather than keeping it running like a Deployment.
 #
-# A Job can't be changed once it exists, so run it again by deleting it first:
-#   kubectl delete job migrate --ignore-not-found && kubectl apply -f infra/k8s/migrate.yaml
+# It's a Helm hook, so Helm runs it at set points instead of keeping it as part of the release:
+# - pre-upgrade: before helm upgrade replaces any pod, so new code never meets old tables.
+#   Migrations add rather than remove, so the old pods still work with the new tables.
+# - post-install: after the first install, since before it the ConfigMap it reads isn't there.
+# A Job can't be changed once it exists, so Helm deletes the last one before making the next,
+# and keeps the newest for its logs (kubectl logs job/migrate).
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: migrate
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   # Tries 3 more times if it fails, say because the database isn't up yet.
   backoffLimit: 3
@@ -16,8 +23,8 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: support-ai-api
-          imagePullPolicy: IfNotPresent
+          image: "{{ .Values.image.api }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["alembic", "upgrade", "head"]
           envFrom:
             - configMapRef:

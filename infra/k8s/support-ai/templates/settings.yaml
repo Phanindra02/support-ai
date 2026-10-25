@@ -1,0 +1,21 @@
+# The settings that aren't secret, as environment variables for the pods (envFrom). The keys
+# are the names in app/config.py and ml/service.py. Keys go in support-ai-secrets instead
+# (secrets.env.example).
+#
+# The values are in values.yaml. Changing one takes a restart, since the apps read their
+# settings when they start: kubectl rollout restart deployment api worker
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: support-ai-settings
+data:
+  {{- toYaml .Values.settings | nindent 2 }}
+---
+# The model service's own settings. Switching a model to a new version is a change here and
+# a restart (docs/system-design/15-model-rollouts.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-settings
+data:
+  {{- toYaml .Values.modelSettings | nindent 2 }}

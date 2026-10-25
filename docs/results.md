@@ -346,3 +346,12 @@ Measured on 2026-10-24 by scoring the 2,856 test tweets with the saved sentiment
 
 - 0.8 was chosen. Almost every flagged message is really negative (99.1%), and only the angriest fifth of messages alert. At 0.5, over half of all messages would alert, which trains a team to ignore the channel. Above 0.8, precision stops rising while recall keeps falling.
 - On four made-up support messages, the alert reasons came out as expected: no alert for "Where is my order?" or a password question, and an alert for an angry refund request (negative 0.94) and for a site outage (high priority 0.97). The outage also scored negative 0.82, though it's written calmly. A model trained on airline tweets reads outage words as anger, which is a cost of training on another domain's data.
+
+## Kubernetes on minikube (Stage 8)
+
+Measured on 2026-10-25 on minikube 1.39 (Kubernetes 1.37, 4 CPUs and 4 GB from Docker Desktop), with the chart installed by `helm install support-ai infra/k8s/support-ai --wait`. Postgres was the Mac's, at `host.minikube.internal`.
+
+- `kubectl top pods`, two minutes after the install with no traffic: each API pod 155 MB and 3 to 14 millicores, the model service 130 MB, the worker 73 MB, and Redis 13 MB. All are well inside their limits (512, 768, 512, and 256 MB), and the autoscaler read the API at 3% of its 70% target.
+- From an API pod, a ticket ("Production outage" / "Our whole site is down and no customer can pay. This is urgent.") was saved at medium and its triage queued. 2 seconds later it was high, with both predictions saved from v1. The worker's log says the job took 1.6 seconds, which covers calling the model service and saving. An earlier, angrier ticket took 2.1 seconds and stayed medium (0.61), with negative 0.73, below the alert's 0.8.
+- `helm upgrade` with nothing changed took 5.3 seconds: the migrate Job ran first, and no pod was replaced.
+- The worker restarted once on the first install, because it started before Redis accepted connections.

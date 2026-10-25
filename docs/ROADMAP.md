@@ -197,7 +197,7 @@ EKS bills by the hour. Get a yes before creating the cluster, and delete it as s
 - [x] Write Deployments and Services for the API, worker, model service, and Redis. n8n can stay on EC2. In `infra/k8s/`. The worker has no Service, since it takes jobs from Redis. Redis keeps its append-only file on a PersistentVolumeClaim, as compose keeps it on a volume, and the migrations run as a Job.
 - [x] Add ConfigMaps for settings and Secrets for keys. `infra/k8s/settings.yaml` has one ConfigMap for the API and worker and one for the model service. The Secret is made from `infra/k8s/secrets.env`, a git-ignored copy of `secrets.env.example`, and only the API, worker, and migrations get it.
 - [x] Add readiness and liveness probes, CPU and memory limits, and a HorizontalPodAutoscaler for the API. Sized from the server's measurements. The model service also has a startup probe, so a download from S3 isn't mistaken for a hang. The autoscaler keeps 2 to 6 API pods near 70% of their 250m CPU request.
-- [ ] Get everything running on minikube, then package it as a Helm chart.
+- [x] Get everything running on minikube, then package it as a Helm chart. `infra/k8s/support-ai/`, run with `infra/k8s/README.md`. On minikube, the model service reads the Mac's `ml/models/` mounted into minikube, and Postgres is the Mac's. A ticket's triage ran end to end in 2 seconds. The migrations are a Helm hook, run before an upgrade replaces any pod.
 - [ ] Create an EKS cluster with eksctl (two small Graviton nodes, such as t4g.medium), and keep RDS as the database.
 - [ ] Give pods S3 access through an IAM role using EKS Pod Identity, so no AWS keys live in the cluster.
 - [ ] Install the AWS Load Balancer Controller and create an HTTPS Ingress with a free ACM certificate.
