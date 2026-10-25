@@ -194,7 +194,7 @@ Done when: the API, worker, and model service autoscale on EKS behind HTTPS, CI 
 EKS bills by the hour. Get a yes before creating the cluster, and delete it as soon as the demo is recorded.
 
 - [x] Install minikube, kubectl, Helm, and eksctl with Homebrew, and add a `/health` endpoint to each service. minikube 1.39, Helm 4.3, and eksctl 0.231 (kubectl 1.36 was already there). The API's `/health` skips the database, Redis, and the rate limit, and the model service already had one. The worker answers no HTTP, so `python -m worker.health` checks Redis for its heartbeat instead.
-- [ ] Write Deployments and Services for the API, worker, model service, and Redis. n8n can stay on EC2.
+- [x] Write Deployments and Services for the API, worker, model service, and Redis. n8n can stay on EC2. In `infra/k8s/`. The worker has no Service, since it takes jobs from Redis. Redis keeps its append-only file on a PersistentVolumeClaim, as compose keeps it on a volume, and the migrations run as a Job.
 - [ ] Add ConfigMaps for settings and Secrets for keys.
 - [ ] Add readiness and liveness probes, CPU and memory limits, and a HorizontalPodAutoscaler for the API.
 - [ ] Get everything running on minikube, then package it as a Helm chart.
