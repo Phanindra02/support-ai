@@ -124,3 +124,42 @@ def test_the_readme_creates_the_same_document():
     assert "--name support-ai-deploy --document-type Command" in readme
     assert "file://infra/aws/deploy-document.json" in readme
     assert "gh variable set SERVER_INSTANCE_ID" in readme
+
+
+@pytest.fixture(scope="module")
+def eks_job():
+    workflow = yaml.safe_load((PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    return workflow["jobs"]["deploy-eks"]
+
+
+def test_merges_deploy_to_eks_only_while_the_cluster_exists(eks_job):
+    assert eks_job["needs"] == "image"
+    # EKS_CLUSTER is set only while the cluster is up, so after it's deleted the job is skipped.
+    assert eks_job["if"] == "github.ref == 'refs/heads/main' && vars.EKS_CLUSTER != ''"
+    assert eks_job["concurrency"] == {"group": "deploy-eks", "cancel-in-progress": False}
+    assert eks_job["permissions"] == {"contents": "read", "id-token": "write"}
+
+
+def test_the_eks_deploy_runs_this_commits_images_and_waits_for_them(eks_job):
+    script = "\n".join(step.get("run", "") for step in eks_job["steps"])
+    assert 'aws eks update-kubeconfig --region us-east-2 --name "$CLUSTER"' in script
+    assert "helm upgrade --install support-ai infra/k8s/support-ai" in script
+    assert "-f infra/k8s/support-ai/values-eks.yaml" in script
+    assert "image.tag=sha-${GITHUB_SHA::7}" in script
+    assert "--wait" in script
+
+
+def test_ci_may_look_up_only_the_support_ai_cluster():
+    find = statements("github-ci-permissions.json")["FindTheEksCluster"]
+    assert find["Action"] == "eks:DescribeCluster"
+    assert find["Resource"] == "arn:aws:eks:us-east-2:ACCOUNT_ID:cluster/support-ai"
+
+
+def test_the_readme_lets_ci_change_only_the_default_namespace():
+    readme = (PROJECT_ROOT / "infra" / "k8s" / "README.md").read_text()
+    assert "aws eks create-access-entry" in readme
+    assert "cluster-access-policy/AmazonEKSEditPolicy" in readme
+    assert "--access-scope type=namespace,namespaces=default" in readme
+    # Deleting the cluster starts by turning the CI deploy off.
+    deleting = readme.split("### Deleting it")[1]
+    assert deleting.index("gh variable delete EKS_CLUSTER") < deleting.index("eksctl delete")
