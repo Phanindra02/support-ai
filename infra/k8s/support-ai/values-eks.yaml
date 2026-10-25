@@ -1,0 +1,20 @@
+# EKS's values, which Helm merges over values.yaml. The images are CI's in ECR, whose address
+# names the AWS account, which this repo leaves out, so they're set on the command line
+# (infra/k8s/README.md):
+#   helm upgrade --install support-ai infra/k8s/support-ai -f infra/k8s/support-ai/values-eks.yaml \
+#     --set image.api=$REGISTRY/support-ai-api,image.model=$REGISTRY/support-ai-model,image.tag=sha-...
+
+model:
+  # No folder of models on EKS's nodes, so the service downloads them from S3 into an empty
+  # volume, with its IAM role.
+  hostPath: ""
+
+# No Secret: the apps read their keys from Parameter Store with their IAM role, as on the EC2
+# server, so no key is stored in the cluster.
+secretName: ""
+
+settings:
+  PARAMETER_STORE_PATH: /support-ai
+  # n8n stays on the EC2 server, out of the cluster's reach, and Parameter Store has no
+  # N8N_WEBHOOK_SECRET, so urgent alerts are skipped and logged. null removes minikube's URL.
+  N8N_WEBHOOK_URL: null

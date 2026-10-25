@@ -52,3 +52,63 @@ helm upgrade support-ai infra/k8s/support-ai --wait --set-string modelSettings.P
 helm uninstall support-ai          # everything the chart made. The Secret stays.
 minikube stop                      # keeps the cluster for next time, or: minikube delete
 ```
+
+## The EKS cluster
+
+`eks-cluster.yaml` is the cluster for eksctl: Kubernetes 1.37, two t4g.medium nodes, in the default VPC with RDS and the EC2 server. It bills by the hour, so it exists only for the demo.
+
+| | Per hour |
+|---|---|
+| EKS control plane | $0.10 |
+| 2 × t4g.medium | $0.067 |
+| 2 nodes' public IPv4 addresses and 20 GB disks | $0.014 |
+| **About** | **$0.18, or $4.30 a day** |
+
+The load balancer for HTTPS adds about $0.03 an hour. The nodes sit in the VPC's public subnets, which saves a NAT gateway ($0.045 an hour).
+
+### Creating it
+
+About 20 minutes. eksctl also points kubectl at the new cluster: `kubectl config use-context minikube` goes back, and `kubectl config get-contexts` lists both.
+
+```bash
+eksctl create cluster -f infra/k8s/eks-cluster.yaml
+kubectl get nodes
+```
+
+RDS's security group lets in only the EC2 server. Let in the cluster too. EKS gives every node the cluster's own security group, and the pods' traffic leaves from the nodes:
+
+```bash
+CLUSTER_SG=$(aws eks describe-cluster --region us-east-2 --name support-ai --query cluster.resourcesVpcConfig.clusterSecurityGroupId --output text)
+aws ec2 authorize-security-group-ingress --region us-east-2 --group-id sg-05e1413ca647a380c --protocol tcp --port 5432 --source-group "$CLUSTER_SG"
+```
+
+### Giving the pods IAM roles, and installing the chart
+
+The cluster file's `iam` section names two roles: one for the API, worker, and migrations (uploads, document text, and the keys in Parameter Store), and one for the model service (only its models). eksctl makes them, trusting only this cluster's pods, and links each to its service account:
+
+```bash
+eksctl create podidentityassociation -f infra/k8s/eks-cluster.yaml
+```
+
+Then install the chart with `values-eks.yaml`: CI's images from ECR, no Secret (the keys come from Parameter Store, as on the server), and the models from S3. The tag is the last commit on `main`, whose images CI pushed:
+
+```bash
+REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-2.amazonaws.com
+TAG=sha-$(git rev-parse origin/main | cut -c1-7)
+helm upgrade --install support-ai infra/k8s/support-ai -f infra/k8s/support-ai/values-eks.yaml \
+  --set "image.api=$REGISTRY/support-ai-api,image.model=$REGISTRY/support-ai-model,image.tag=$TAG" \
+  --wait --timeout 10m
+```
+
+Urgent alerts are skipped on EKS, with a warning in the worker's log: n8n stays on the EC2 server, out of the cluster's reach.
+
+### Deleting it
+
+In this order. The chart's resources first, so the load balancer and Redis's EBS volume, which Kubernetes made in AWS, are deleted with them. Then RDS's rule, because a security group can't be deleted while another one's rule names it.
+
+```bash
+helm uninstall support-ai
+CLUSTER_SG=$(aws eks describe-cluster --region us-east-2 --name support-ai --query cluster.resourcesVpcConfig.clusterSecurityGroupId --output text)
+aws ec2 revoke-security-group-ingress --region us-east-2 --group-id sg-05e1413ca647a380c --protocol tcp --port 5432 --source-group "$CLUSTER_SG"
+eksctl delete cluster -f infra/k8s/eks-cluster.yaml --wait
+```

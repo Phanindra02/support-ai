@@ -19,6 +19,7 @@ spec:
       labels:
         app: worker
     spec:
+      serviceAccountName: support-ai-app
       # On a stop, RQ finishes the job it's running before it exits. Kubernetes' default 30
       # seconds could cut a long job off halfway, as compose's 10 could.
       terminationGracePeriodSeconds: 60
@@ -30,8 +31,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: support-ai-settings
+            {{- if .Values.secretName }}
             - secretRef:
-                name: support-ai-secrets
+                name: {{ .Values.secretName }}
+            {{- end }}
           # 79 MB on the server between jobs. A job runs in a copy of the worker, which needs
           # room of its own.
           resources:

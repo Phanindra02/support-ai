@@ -20,6 +20,7 @@ spec:
       labels:
         app: api
     spec:
+      serviceAccountName: support-ai-app
       containers:
         - name: api
           image: "{{ .Values.image.api }}:{{ .Values.image.tag }}"
@@ -31,8 +32,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: support-ai-settings
+            {{- if .Values.secretName }}
             - secretRef:
-                name: support-ai-secrets
+                name: {{ .Values.secretName }}
+            {{- end }}
           # Requests are what the scheduler sets aside on a node, and what the autoscaler's
           # percentage is of. Limits are the most a pod may use: over the CPU limit it's
           # slowed down, and over the memory limit it's killed and restarted. One pod used

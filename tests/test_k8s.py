@@ -297,3 +297,84 @@ def test_the_migrations_run_before_an_upgrade_replaces_any_pod(resources):
 def test_the_autoscalers_range_comes_from_the_values():
     autoscaler = render("--set", "api.maxReplicas=10")["HorizontalPodAutoscaler"]["api"]["spec"]
     assert autoscaler["maxReplicas"] == 10
+
+
+# The EKS cluster
+
+
+@pytest.fixture(scope="module")
+def eks():
+    return yaml.safe_load((K8S_DIR / "eks-cluster.yaml").read_text())
+
+
+def test_the_cluster_runs_two_graviton_nodes(eks):
+    [nodes] = eks["managedNodeGroups"]
+    # Arm, like the EC2 server, so CI's images run on it.
+    assert nodes["instanceType"].startswith("t4g.")
+    assert nodes["minSize"] == nodes["maxSize"] == nodes["desiredCapacity"] == 2
+
+
+def test_the_cluster_needs_no_nat_gateway(eks):
+    # Private subnets would need a NAT gateway, about $33 a month, to reach ECR and S3.
+    assert set(eks["vpc"]["subnets"]) == {"public"}
+    assert eks["managedNodeGroups"][0]["privateNetworking"] is False
+
+
+def test_the_cluster_has_the_addons_the_chart_needs(eks):
+    names = {addon["name"] for addon in eks["addons"]}
+    # Redis's volume, the autoscaler's CPU numbers, and IAM roles for pods.
+    assert {"aws-ebs-csi-driver", "metrics-server", "eks-pod-identity-agent"} <= names
+
+
+# EKS: Pod Identity and values-eks.yaml
+
+EKS_VALUES = str(CHART_DIR / "values-eks.yaml")
+
+
+@pytest.fixture(scope="module")
+def on_eks():
+    return render("-f", EKS_VALUES)
+
+
+def test_each_pod_runs_as_the_service_account_with_its_role(resources, eks):
+    roles = {a["serviceAccountName"]: a for a in eks["iam"]["podIdentityAssociations"]}
+    expected = {"api": "support-ai-app", "worker": "support-ai-app", "model": "support-ai-model"}
+    for name, account in expected.items():
+        assert pod_spec(resources["Deployment"][name])["serviceAccountName"] == account
+    assert pod_spec(resources["Job"]["migrate"])["serviceAccountName"] == "support-ai-app"
+    assert set(resources["ServiceAccount"]) == set(roles)
+    assert all(a["namespace"] == "default" for a in roles.values())
+
+
+def test_only_the_model_service_may_read_the_models(eks):
+    roles = {a["serviceAccountName"]: a for a in eks["iam"]["podIdentityAssociations"]}
+    app = roles["support-ai-app"]["permissionPolicy"]["Statement"]
+    [model] = roles["support-ai-model"]["permissionPolicy"]["Statement"]
+    assert not any("models/" in statement["Resource"] for statement in app)
+    assert (model["Action"], model["Resource"].rsplit(":", 1)[-1]) == (
+        "s3:GetObject",
+        "support-ai-docs-phanindra02/models/*",
+    )
+
+
+def test_on_eks_the_keys_come_from_parameter_store_not_a_secret(on_eks, eks):
+    for resource in [*on_eks["Deployment"].values(), on_eks["Job"]["migrate"]]:
+        sources = container(resource).get("envFrom", [])
+        assert not any("secretRef" in source for source in sources)
+    path = on_eks["ConfigMap"]["support-ai-settings"]["data"]["PARAMETER_STORE_PATH"]
+    roles = {a["serviceAccountName"]: a for a in eks["iam"]["podIdentityAssociations"]}
+    [read] = [s for s in roles["support-ai-app"]["permissionPolicy"]["Statement"] if "ssm:" in s["Action"]]
+    assert read["Resource"].endswith(f":parameter{path}")
+
+
+def test_on_eks_nothing_points_at_the_mac(on_eks):
+    for configmap in on_eks["ConfigMap"].values():
+        assert not any("minikube" in value for value in configmap["data"].values())
+    [volume] = pod_spec(on_eks["Deployment"]["model"])["volumes"]
+    assert volume == {"name": "models", "emptyDir": {}}
+
+
+def test_redis_may_write_to_a_new_ebs_disk(resources):
+    # Redis runs as user and group 999, and a new EBS disk's top folder belongs to root. Without
+    # this, Redis crashed on EKS with "Permission denied".
+    assert pod_spec(resources["Deployment"]["redis"])["securityContext"]["fsGroup"] == 999

@@ -33,6 +33,12 @@ spec:
       labels:
         app: redis
     spec:
+      # Redis runs as user and group 999, and a new EBS disk's top folder belongs to root, so
+      # Redis couldn't write its file there. fsGroup gives group 999 the disk when it's mounted,
+      # and OnRootMismatch does that only when it's not already so, rather than every start.
+      securityContext:
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: redis
           image: redis:8

@@ -1,0 +1,97 @@
+# The EKS cluster (Stage 8), for eksctl:
+#   eksctl create cluster -f infra/k8s/eks-cluster.yaml
+#
+# It bills by the hour, about $0.18 (infra/k8s/README.md), so it's deleted as soon as the demo
+# is recorded. The steps, including what to undo first, are in the README.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: support-ai
+  region: us-east-2
+  # EKS's default, and minikube's. In standard support until December 2027: a version in
+  # extended support costs $0.60 an hour instead of $0.10.
+  version: "1.37"
+
+# The default VPC, where RDS and the EC2 server already are, so the pods reach the database
+# without connecting two networks. Its subnets are public, so the nodes reach ECR, S3, and the
+# internet through the VPC's internet gateway. That saves a NAT gateway, about $33 a month.
+# Nothing reaches the nodes from the internet: their security group lets in only the cluster.
+vpc:
+  id: vpc-0f9a361a3857764b0
+  subnets:
+    public:
+      us-east-2a: { id: subnet-021a9bfe488217957 }
+      us-east-2b: { id: subnet-0825a60aecdc57b09 }
+      us-east-2c: { id: subnet-0fd58ce1b818e69dc }
+
+managedNodeGroups:
+  # Graviton (Arm), like the EC2 server, so CI's images run here unchanged. Each t4g.medium has
+  # 2 CPUs and 4 GB. The pods ask for about 1.7 CPUs and 2 GB in all at 2 API pods, so two
+  # nodes leave room for the autoscaler's extra API pods.
+  - name: graviton
+    instanceType: t4g.medium
+    amiFamily: AmazonLinux2023
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 2
+    volumeSize: 20
+    volumeType: gp3
+    # Public subnets, so no NAT gateway (above).
+    privateNetworking: false
+
+# IAM roles for pods, through EKS Pod Identity, so no AWS keys live in the cluster. A pod that
+# runs as one of these service accounts (the chart makes them) gets the role's short-lived
+# credentials from the Pod Identity agent, as the EC2 server gets its role's. eksctl makes each
+# role, trusting only this cluster's pods. Made with:
+#   eksctl create podidentityassociation -f infra/k8s/eks-cluster.yaml
+iam:
+  podIdentityAssociations:
+    # The API, worker, and migrations: the server role's app permissions (ec2-permissions.json),
+    # without pulling images, which the nodes do.
+    - namespace: default
+      serviceAccountName: support-ai-app
+      roleName: support-ai-eks-app
+      permissionPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SaveUploadedDocs
+            Effect: Allow
+            Action: ["s3:PutObject", "s3:AbortMultipartUpload"]
+            Resource: arn:aws:s3:::support-ai-docs-phanindra02/uploads/*
+          - Sid: ReadDocumentText
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: arn:aws:s3:::support-ai-docs-phanindra02/text/*
+          # The keys, read at startup (PARAMETER_STORE_PATH). The * is this account: a role
+          # can't read another account's parameters.
+          - Sid: LoadTheAppSecrets
+            Effect: Allow
+            Action: ssm:GetParametersByPath
+            Resource: arn:aws:ssm:us-east-2:*:parameter/support-ai
+    # The model service: only its models.
+    - namespace: default
+      serviceAccountName: support-ai-model
+      roleName: support-ai-eks-model
+      permissionPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadTheModels
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: arn:aws:s3:::support-ai-docs-phanindra02/models/*
+
+addons:
+  # Networking, DNS, and Services: every cluster needs these.
+  - name: vpc-cni
+  - name: coredns
+  - name: kube-proxy
+  # Lets pods take an IAM role without AWS keys, for S3 and Parameter Store (the next step).
+  - name: eks-pod-identity-agent
+  # Makes EBS volumes for PersistentVolumeClaims, such as Redis's. EKS has no default storage
+  # class of its own, so the driver adds one (gp3). It gets its IAM role through Pod Identity.
+  - name: aws-ebs-csi-driver
+    useDefaultPodIdentityAssociations: true
+    configurationValues: '{"defaultStorageClass": {"enabled": true}}'
+  # The CPU numbers the API's autoscaler reads, as minikube's addon gives them there.
+  - name: metrics-server
