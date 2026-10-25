@@ -4,7 +4,9 @@ These tests read the files. The first real deploy was checked by hand (infra/aws
 """
 
 import json
+import os
 import re
+import subprocess
 
 import pytest
 import yaml
@@ -48,6 +50,37 @@ def test_the_deploy_runs_the_image_built_from_that_commit(document):
     # Every command runs as ubuntu, who owns the repo and has the ECR login, not as root.
     commands = [c for c in script.splitlines() if re.match(r"(git|docker|sed) ", c)]
     assert commands == []
+
+
+def test_the_deploy_points_both_images_at_that_commit(document, tmp_path):
+    # Runs the document's own sed line on a made-up .env, printing instead of editing in place,
+    # since the Mac's sed takes -i differently. The first version split its parts with "|",
+    # which "(API|MODEL)" also holds, so sed refused it and no deploy ran after Stage 7.
+    [line] = [c for c in document["mainSteps"][0]["inputs"]["runCommand"] if " sed " in c]
+    command = line.removeprefix("as_ubuntu ").replace("sed -i -E", "sed -E")
+    registry = "123456789012.dkr.ecr.us-east-2.amazonaws.com"
+    (tmp_path / ".env").write_text(
+        f"API_IMAGE={registry}/support-ai-api:latest\n"
+        f"MODEL_IMAGE={registry}/support-ai-model:sha-0000000\n"
+        "S3_BUCKET=support-ai-docs\n"
+    )
+
+    result = subprocess.run(
+        ["sh", "-c", command],
+        # Not check=True: the assert below shows sed's own error instead.
+        check=False,
+        cwd=tmp_path,
+        env={"PATH": os.environ["PATH"], "SHORT": "abc1234"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        f"API_IMAGE={registry}/support-ai-api:sha-abc1234\n"
+        f"MODEL_IMAGE={registry}/support-ai-model:sha-abc1234\n"
+        "S3_BUCKET=support-ai-docs\n"
+    )
 
 
 def test_ci_can_run_only_the_deploy_document_on_only_the_server():
