@@ -1,0 +1,10 @@
+# The whole platform on Kubernetes, as one Helm chart: the API, worker, model service, and
+# Redis. Postgres and n8n stay outside the cluster. How to run it: infra/k8s/README.md.
+apiVersion: v2
+name: support-ai
+description: The AI customer support platform, with its API, worker, model service, and Redis
+type: application
+# The chart's own version, raised when the templates change.
+version: 0.1.0
+# The app's version. The images are tagged per commit instead (values.yaml's image.tag).
+appVersion: "0.1.0"

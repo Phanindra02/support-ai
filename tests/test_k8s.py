@@ -1,4 +1,4 @@
-"""The Kubernetes manifests in infra/k8s/ (Stage 8), read as YAML.
+"""The Helm chart in infra/k8s/support-ai/ (Stage 8), rendered with helm template.
 
 Kubernetes accepts a Service whose selector matches no pods, or a port name no container has,
 and the mistake only shows up as requests that go nowhere. These tests catch that first.
@@ -14,16 +14,26 @@ from app.main import app
 from ml.service import Settings as ModelSettings
 
 K8S_DIR = PROJECT_ROOT / "infra" / "k8s"
+CHART_DIR = K8S_DIR / "support-ai"
+
+
+def render(*options: str) -> dict:
+    """The chart's resources as Helm would install them, by kind and then name.
+
+    options are helm's, such as --set image.tag=sha-abc1234.
+    """
+    command = ["helm", "template", "support-ai", str(CHART_DIR), *options]
+    output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+    found = {}
+    for doc in yaml.safe_load_all(output):
+        found.setdefault(doc["kind"], {})[doc["metadata"]["name"]] = doc
+    return found
 
 
 @pytest.fixture(scope="module")
 def resources():
-    """Every resource in infra/k8s/, by kind and then name."""
-    found = {}
-    for path in sorted(K8S_DIR.glob("*.yaml")):
-        for doc in yaml.safe_load_all(path.read_text()):
-            found.setdefault(doc["kind"], {})[doc["metadata"]["name"]] = doc
-    return found
+    """The chart with its default values, which are minikube's."""
+    return render()
 
 
 def pod_spec(resource):
@@ -64,7 +74,7 @@ def test_the_api_worker_and_migrations_share_the_api_image_and_settings(resource
     users = [resources["Deployment"]["api"], resources["Deployment"]["worker"]]
     users.append(resources["Job"]["migrate"])
     for resource in users:
-        assert container(resource)["image"] == "support-ai-api"
+        assert container(resource)["image"] == "support-ai-api:latest"
         assert container(resource)["envFrom"] == [
             {"configMapRef": {"name": "support-ai-settings"}},
             {"secretRef": {"name": "support-ai-secrets"}},
@@ -86,7 +96,7 @@ def test_the_worker_runs_the_worker_and_gets_time_to_finish_a_job(resources):
 
 def test_the_model_service_gets_none_of_the_apis_secrets(resources):
     model = resources["Deployment"]["model"]
-    assert container(model)["image"] == "support-ai-model"
+    assert container(model)["image"] == "support-ai-model:latest"
     assert container(model)["envFrom"] == [{"configMapRef": {"name": "model-settings"}}]
 
 
@@ -237,3 +247,53 @@ def test_the_autoscaler_runs_2_to_6_api_pods_by_cpu(resources):
 def test_the_api_deployment_leaves_the_pod_count_to_the_autoscaler(resources):
     # Applying a count would undo the autoscaler's.
     assert "replicas" not in resources["Deployment"]["api"]["spec"]
+
+
+# The chart's values
+
+
+def test_the_chart_passes_helm_lint():
+    lint = subprocess.run(["helm", "lint", str(CHART_DIR)], capture_output=True, check=False)
+    assert lint.returncode == 0, lint.stdout
+
+
+def test_one_tag_moves_all_three_app_images():
+    # CI deploys one commit's images: sha-<first 7 of the commit>.
+    found = render("--set", "image.tag=sha-abc1234")
+    images = [container(d)["image"] for d in found["Deployment"].values()]
+    images.append(container(found["Job"]["migrate"])["image"])
+    assert sorted(image for image in images if image.startswith("support-ai-")) == [
+        "support-ai-api:sha-abc1234",
+        "support-ai-api:sha-abc1234",
+        "support-ai-api:sha-abc1234",
+        "support-ai-model:sha-abc1234",
+    ]
+
+
+def test_on_minikube_the_model_service_reads_the_macs_models(resources):
+    model = resources["Deployment"]["model"]
+    [volume] = pod_spec(model)["volumes"]
+    assert volume["hostPath"] == {"path": "/models", "type": "Directory"}
+    [mount] = container(model)["volumeMounts"]
+    assert mount["readOnly"] is True
+
+
+def test_without_a_folder_the_model_service_downloads_into_an_empty_volume():
+    model = render("--set", "model.hostPath=")["Deployment"]["model"]
+    [volume] = pod_spec(model)["volumes"]
+    assert volume == {"name": "models", "emptyDir": {}}
+    # It writes the download there.
+    [mount] = container(model)["volumeMounts"]
+    assert "readOnly" not in mount
+
+
+def test_the_migrations_run_before_an_upgrade_replaces_any_pod(resources):
+    annotations = resources["Job"]["migrate"]["metadata"]["annotations"]
+    assert annotations["helm.sh/hook"] == "post-install,pre-upgrade"
+    # A Job can't be changed, so the last one is deleted before the next.
+    assert annotations["helm.sh/hook-delete-policy"] == "before-hook-creation"
+
+
+def test_the_autoscalers_range_comes_from_the_values():
+    autoscaler = render("--set", "api.maxReplicas=10")["HorizontalPodAutoscaler"]["api"]["spec"]
+    assert autoscaler["maxReplicas"] == 10

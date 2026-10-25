@@ -1,0 +1,45 @@
+# Only what differs between clusters. These defaults are for minikube, and another cluster
+# overrides them with its own file (helm upgrade -f) or --set. Everything that's the same
+# everywhere, such as probes and CPU and memory, is in the templates.
+#
+# The resources have fixed names (api, redis, model), so settings can name them, and one
+# release runs per namespace.
+
+image:
+  api: support-ai-api
+  model: support-ai-model
+  # On minikube, the images built on the Mac and loaded into it. On EKS, CI's images in ECR,
+  # tagged sha-<first 7 of the commit>.
+  tag: latest
+  # Use the image already on the node. Without this, Kubernetes always downloads a :latest
+  # image, which on minikube exists nowhere to download from.
+  pullPolicy: IfNotPresent
+
+api:
+  # The autoscaler's range for API pods.
+  minReplicas: 2
+  maxReplicas: 6
+
+model:
+  # A folder on the node with the saved models, mounted into the pod. minikube start mounts
+  # the Mac's ml/models there. Empty, the service downloads them from S3 instead.
+  hostPath: /models
+
+# The support-ai-settings ConfigMap: the API's and worker's settings that aren't secret. The
+# keys are in support-ai-secrets, made from infra/k8s/secrets.env. Values must be strings.
+settings:
+  # The Services in this chart, by name.
+  REDIS_URL: redis://redis:6379/0
+  MODEL_SERVICE_URL: http://model:8000
+  # n8n stays outside the cluster. On minikube, it's compose's n8n on the Mac.
+  N8N_WEBHOOK_URL: http://host.minikube.internal:5678/webhook/urgent-ticket
+  S3_BUCKET: support-ai-docs-phanindra02
+  AWS_REGION: us-east-2
+
+# The model-settings ConfigMap. Switching a model to a new version is a change here and a
+# restart (docs/system-design/15-model-rollouts.md).
+modelSettings:
+  S3_BUCKET: support-ai-docs-phanindra02
+  AWS_REGION: us-east-2
+  PRIORITY_MODEL_VERSION: "1"
+  SENTIMENT_MODEL_VERSION: "1"

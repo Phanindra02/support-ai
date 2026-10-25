@@ -2,7 +2,7 @@
 #
 # A Deployment keeps the asked-for number of pods running, replacing any that die, and swaps
 # them for new ones a few at a time when the image changes. The autoscaler at the bottom
-# sets that number, from 2 to 6, so the Deployment leaves it out: applying this file again
+# sets that number, from 2 to 6 by default, so the Deployment leaves it out: applying this file again
 # would otherwise reset it.
 apiVersion: apps/v1
 kind: Deployment
@@ -22,10 +22,8 @@ spec:
     spec:
       containers:
         - name: api
-          image: support-ai-api
-          # On minikube, the image is the one built on the Mac. With no tag, Kubernetes would
-          # read it as :latest and always try to download it.
-          imagePullPolicy: IfNotPresent
+          image: "{{ .Values.image.api }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 8000
@@ -93,8 +91,8 @@ spec:
     kind: Deployment
     name: api
   # Two, so one can restart while the other answers.
-  minReplicas: 2
-  maxReplicas: 6
+  minReplicas: {{ .Values.api.minReplicas }}
+  maxReplicas: {{ .Values.api.maxReplicas }}
   metrics:
     - type: Resource
       resource:

@@ -18,8 +18,8 @@ spec:
     spec:
       containers:
         - name: model
-          image: support-ai-model
-          imagePullPolicy: IfNotPresent
+          image: "{{ .Values.image.model }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 8000
@@ -59,11 +59,22 @@ spec:
           volumeMounts:
             - name: models
               mountPath: /models
+              {{- if .Values.model.hostPath }}
+              readOnly: true
+              {{- end }}
       volumes:
-        # Empty when the pod starts, so the service downloads its models from S3 into it. It
-        # lasts as long as the pod, so a container restart in the same pod doesn't download again.
         - name: models
+          {{- if .Values.model.hostPath }}
+          # On minikube, the models ml.save wrote on the Mac, which minikube start mounts into
+          # minikube (infra/k8s/README.md), so the pod needs no AWS keys, as in compose.
+          hostPath:
+            path: {{ .Values.model.hostPath }}
+            type: Directory
+          {{- else }}
+          # On EKS, empty when the pod starts, so the service downloads its models from S3
+          # into it with the pod's IAM role. It lasts as long as the pod.
           emptyDir: {}
+          {{- end }}
 ---
 # Only the worker calls it, at http://model:8000.
 apiVersion: v1

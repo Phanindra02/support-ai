@@ -67,6 +67,11 @@ jobs:
         with:
           version: "0.13.2"
       - run: uv sync --locked
+      # tests/test_k8s.py renders the Helm chart. The same version as on the Mac, so a chart
+      # that works there renders the same here.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.1
       # A new random key for every run, so no key is written in the repo for anyone to copy.
       - name: Make a JWT secret for this run
         run: echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"

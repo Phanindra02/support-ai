@@ -47,6 +47,12 @@ def test_the_tests_run(jobs):
     assert "uv run pytest" in commands(jobs["test"])
 
 
+def test_the_tests_have_helm_to_render_the_chart(jobs):
+    [helm] = [step for step in jobs["test"]["steps"] if "setup-helm" in step.get("uses", "")]
+    # Pinned, like uv: an unpinned Helm could render the chart differently one day.
+    assert helm["with"]["version"].startswith("v4.")
+
+
 def test_every_job_installs_exactly_what_uv_lock_says(jobs):
     for job in jobs.values():
         if uv_versions(job):
