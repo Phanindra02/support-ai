@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from app.config import PROJECT_ROOT, Settings
+from app.main import app
 from ml.service import Settings as ModelSettings
 
 K8S_DIR = PROJECT_ROOT / "infra" / "k8s"
@@ -175,3 +176,64 @@ def test_the_filled_in_secrets_file_is_never_committed():
         ["git", "check-ignore", "-q", "infra/k8s/secrets.env"], check=False, cwd=PROJECT_ROOT
     )
     assert ignored.returncode == 0
+
+
+# Probes, limits, and the autoscaler
+
+
+def quantity(value: str) -> float:
+    """A CPU or memory amount, like 250m, "1", or 512Mi, as a plain number."""
+    units = {"m": 1e-3, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30}
+    for unit, factor in units.items():
+        if value.endswith(unit):
+            return float(value.removesuffix(unit)) * factor
+    return float(value)
+
+
+def test_every_container_has_cpu_and_memory_requests_within_its_limits(resources):
+    for resource in [*resources["Deployment"].values(), resources["Job"]["migrate"]]:
+        limits = container(resource)["resources"]
+        for kind in ["cpu", "memory"]:
+            assert quantity(limits["requests"][kind]) <= quantity(limits["limits"][kind])
+
+
+def test_the_api_and_model_service_probe_their_health_endpoints(resources):
+    # /health is in app/main.py and ml/service.py.
+    assert "/health" in app.openapi()["paths"]
+    for name in ["api", "model"]:
+        service = container(resources["Deployment"][name])
+        for probe in ["readinessProbe", "livenessProbe"]:
+            assert service[probe]["httpGet"] == {"path": "/health", "port": "http"}
+
+
+def test_the_model_service_gets_time_to_download_its_models(resources):
+    startup = container(resources["Deployment"]["model"])["startupProbe"]
+    assert startup["periodSeconds"] * startup["failureThreshold"] >= 60
+
+
+def test_the_worker_is_probed_with_its_health_command(resources):
+    worker = container(resources["Deployment"]["worker"])
+    assert worker["livenessProbe"]["exec"]["command"] == ["python", "-m", "worker.health"]
+    # Python takes longer than the default 1 second to start.
+    assert worker["livenessProbe"]["timeoutSeconds"] >= 5
+
+
+def test_redis_is_probed_like_in_compose(resources):
+    redis = container(resources["Deployment"]["redis"])
+    for probe in ["readinessProbe", "livenessProbe"]:
+        assert redis[probe]["exec"]["command"] == ["redis-cli", "ping"]
+
+
+def test_the_autoscaler_runs_2_to_6_api_pods_by_cpu(resources):
+    autoscaler = resources["HorizontalPodAutoscaler"]["api"]["spec"]
+    assert autoscaler["scaleTargetRef"] == {"apiVersion": "apps/v1", "kind": "Deployment", "name": "api"}
+    assert (autoscaler["minReplicas"], autoscaler["maxReplicas"]) == (2, 6)
+    [metric] = autoscaler["metrics"]
+    assert metric["resource"]["name"] == "cpu"
+    # The autoscaler's percentage is of the request, so the API must have one.
+    assert container(resources["Deployment"]["api"])["resources"]["requests"]["cpu"]
+
+
+def test_the_api_deployment_leaves_the_pod_count_to_the_autoscaler(resources):
+    # Applying a count would undo the autoscaler's.
+    assert "replicas" not in resources["Deployment"]["api"]["spec"]

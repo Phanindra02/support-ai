@@ -1,8 +1,9 @@
 # The API: FastAPI under uvicorn, from infra/api.Dockerfile.
 #
 # A Deployment keeps the asked-for number of pods running, replacing any that die, and swaps
-# them for new ones a few at a time when the image changes. Two pods, so one can restart
-# while the other answers.
+# them for new ones a few at a time when the image changes. The autoscaler at the bottom
+# sets that number, from 2 to 6, so the Deployment leaves it out: applying this file again
+# would otherwise reset it.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,7 +11,6 @@ metadata:
   labels:
     app: api
 spec:
-  replicas: 2
   # Which pods are this Deployment's: the ones with the template's label below.
   selector:
     matchLabels:
@@ -35,6 +35,34 @@ spec:
                 name: support-ai-settings
             - secretRef:
                 name: support-ai-secrets
+          # Requests are what the scheduler sets aside on a node, and what the autoscaler's
+          # percentage is of. Limits are the most a pod may use: over the CPU limit it's
+          # slowed down, and over the memory limit it's killed and restarted. One pod used
+          # 177 MB on the server.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          # Ready: send it requests. A pod that fails this is taken out of the Service until it
+          # passes again, without a restart.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          # Alive: if this fails 3 times in a row, 30 seconds, the container is restarted.
+          # /health checks neither the database nor Redis, so their outage doesn't restart pods.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
 ---
 # One stable name and address for the API's pods, which come and go with new addresses.
 # Other pods reach it at http://api:8000, and requests are spread over the pods that are ready.
@@ -49,3 +77,28 @@ spec:
     - name: http
       port: 8000
       targetPort: http
+---
+# Adds API pods when they're busy, and removes them when they're not. Every 15 seconds it
+# compares the pods' average CPU with 70% of what they request (250m, so 175m each), and asks
+# for as many pods as would bring it back to 70%. It removes pods only after 5 minutes of less
+# load, so a short lull doesn't shrink it. It reads CPU from metrics-server, which minikube
+# and EKS add separately.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  # Two, so one can restart while the other answers.
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

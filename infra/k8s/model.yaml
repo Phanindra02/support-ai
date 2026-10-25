@@ -27,6 +27,35 @@ spec:
           envFrom:
             - configMapRef:
                 name: model-settings
+          # 149 MB on the server, and 268 MB on the Mac. Loading the models takes more.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          # The service listens only once both models are loaded, which includes downloading
+          # them from S3 the first time. The other probes wait until this passes, for up to
+          # 2 minutes, rather than restarting a pod that's still downloading.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             - name: models
               mountPath: /models

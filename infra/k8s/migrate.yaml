@@ -24,3 +24,10 @@ spec:
                 name: support-ai-settings
             - secretRef:
                 name: support-ai-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

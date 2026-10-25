@@ -32,3 +32,23 @@ spec:
                 name: support-ai-settings
             - secretRef:
                 name: support-ai-secrets
+          # 79 MB on the server between jobs. A job runs in a copy of the worker, which needs
+          # room of its own.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # The worker answers no HTTP, so Kubernetes runs worker/health.py in the container
+          # instead: it fails once RQ's heartbeat for this pod is gone from Redis. Python takes
+          # a second or two to start, so the default 1-second timeout would fail it.
+          # No readiness probe: that only decides which pods a Service sends requests to.
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "worker.health"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
