@@ -209,9 +209,9 @@ EKS bills by the hour. Get a yes before creating the cluster, and delete it as s
 
 ### System design
 
-- [ ] Learn service discovery, health checks, autoscaling, and observability: logs, metrics, and traces.
-- [ ] Learn timeouts, retries with backoff, and circuit breakers between services.
-- [ ] Apply it: add timeouts and retries to the API's calls to the model service.
+- [x] Learn service discovery, health checks, autoscaling, and observability: logs, metrics, and traces. `docs/system-design/16-service-discovery-and-observability.md`.
+- [x] Learn timeouts, retries with backoff, and circuit breakers between services. `docs/system-design/17-timeouts-retries-circuit-breakers.md`, which also explains why there's no circuit breaker yet: nobody waits on the model service.
+- [x] Apply it: add timeouts and retries to the API's calls to the model service. The worker makes those calls (`ask_model` in `worker/jobs.py`): a 1-second connect timeout, and up to 3 attempts with jittered backoff for failures that might pass, inside RQ's own retries.
 
 ## Stage 9: System design practice
 

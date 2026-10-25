@@ -10,9 +10,17 @@ from sqlalchemy import select
 from app.config import settings
 from app.models import ModelName, Prediction, Ticket, TicketPriority
 from app.queue import TRIAGE_RETRY, TRIAGE_TICKET, get_queue, make_queue
-from worker.jobs import triage
+from worker.jobs import MODEL_SERVICE_ATTEMPTS, ask_model, triage
 
 MODEL_SERVICE_URL = "http://model:8000"
+
+
+@pytest.fixture(autouse=True)
+def waits(monkeypatch):
+    """The retry waits ask_model would have slept, recorded instead of slept."""
+    slept = []
+    monkeypatch.setattr("worker.jobs.time.sleep", slept.append)
+    return slept
 
 
 @pytest.fixture
@@ -201,6 +209,62 @@ def test_if_the_model_service_fails_nothing_is_saved_or_sent(
 
     assert stored_priority(session_factory, ticket["id"]) == TicketPriority.medium
     assert n8n.requests == []
+
+
+def replies_in_turn(*replies):
+    """A reply function that answers with each reply in turn, raising any that are errors."""
+    remaining = list(replies)
+
+    def reply(request):
+        next_reply = remaining.pop(0)
+        if isinstance(next_reply, Exception):
+            raise next_reply
+        return next_reply
+
+    return reply
+
+
+OK = httpx.Response(200, json=prediction("low", low=0.9))
+
+
+@pytest.mark.parametrize(
+    "first_failure",
+    [
+        httpx.Response(503),
+        httpx.Response(502),
+        httpx.ConnectError("refused"),
+        httpx.ReadTimeout("slow"),
+    ],
+)
+def test_a_brief_model_service_failure_is_asked_again(model_service_url, waits, first_failure):
+    models, requests = fake_model_service(replies_in_turn(first_failure, OK))
+
+    assert ask_model(models, "priority", "Refund please")["label"] == "low"
+    assert len(requests) == 2
+    assert len(waits) == 1
+
+
+def test_a_failure_that_wont_pass_is_not_asked_again(model_service_url, waits):
+    models, requests = fake_model_service(lambda request: httpx.Response(422))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        ask_model(models, "priority", "Refund please")
+    assert len(requests) == 1
+    assert waits == []
+
+
+def test_the_model_service_is_asked_at_most_3_times_with_growing_random_waits(
+    model_service_url, waits
+):
+    models, requests = fake_model_service(lambda request: httpx.Response(503))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        ask_model(models, "priority", "Refund please")
+    assert len(requests) == MODEL_SERVICE_ATTEMPTS == 3
+    # Full jitter: random, below a cap that doubles.
+    assert len(waits) == 2
+    assert 0 <= waits[0] <= 0.5
+    assert 0 <= waits[1] <= 1
 
 
 def test_a_ticket_that_no_longer_exists_is_skipped(session_factory, model_service_url, alerts):
