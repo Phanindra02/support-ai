@@ -25,8 +25,12 @@ model:
   # the Mac's ml/models there. Empty, the service downloads them from S3 instead.
   hostPath: /models
 
+# The Secret with the keys, made from infra/k8s/secrets.env. Empty on EKS, where the apps read
+# the keys from Parameter Store instead (PARAMETER_STORE_PATH below), with their IAM role.
+secretName: support-ai-secrets
+
 # The support-ai-settings ConfigMap: the API's and worker's settings that aren't secret. The
-# keys are in support-ai-secrets, made from infra/k8s/secrets.env. Values must be strings.
+# keys are in the Secret above. Values must be strings.
 settings:
   # The Services in this chart, by name.
   REDIS_URL: redis://redis:6379/0

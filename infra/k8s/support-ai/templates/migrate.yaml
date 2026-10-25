@@ -19,6 +19,7 @@ spec:
   backoffLimit: 3
   template:
     spec:
+      serviceAccountName: support-ai-app
       # Never restart the container in place. A failed try gets a new pod, up to backoffLimit.
       restartPolicy: Never
       containers:
@@ -29,8 +30,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: support-ai-settings
+            {{- if .Values.secretName }}
             - secretRef:
-                name: support-ai-secrets
+                name: {{ .Values.secretName }}
+            {{- end }}
           resources:
             requests:
               cpu: 100m

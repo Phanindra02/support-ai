@@ -16,6 +16,7 @@ spec:
       labels:
         app: model
     spec:
+      serviceAccountName: support-ai-model
       containers:
         - name: model
           image: "{{ .Values.image.model }}:{{ .Values.image.tag }}"

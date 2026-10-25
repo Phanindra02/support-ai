@@ -355,3 +355,12 @@ Measured on 2026-10-25 on minikube 1.39 (Kubernetes 1.37, 4 CPUs and 4 GB from D
 - From an API pod, a ticket ("Production outage" / "Our whole site is down and no customer can pay. This is urgent.") was saved at medium and its triage queued. 2 seconds later it was high, with both predictions saved from v1. The worker's log says the job took 1.6 seconds, which covers calling the model service and saving. An earlier, angrier ticket took 2.1 seconds and stayed medium (0.61), with negative 0.73, below the alert's 0.8.
 - `helm upgrade` with nothing changed took 5.3 seconds: the migrate Job ran first, and no pod was replaced.
 - The worker restarted once on the first install, because it started before Redis accepted connections.
+
+## EKS (Stage 8)
+
+Measured on 2026-10-25 on the EKS cluster from `infra/k8s/eks-cluster.yaml`: Kubernetes 1.37, two t4g.medium nodes in us-east-2, with the chart installed from `values-eks.yaml` and CI's images for `sha-9b30d69`.
+
+- `eksctl create cluster` took about 20 minutes, which is mostly EKS building the control plane. The two nodes then used 3% of their CPU and 509 to 556 MB of their 4 GB each, before the chart.
+- The first install failed: Redis crashed with "Can't open or create append-only dir appendonlydir: Permission denied". Redis runs as user 999, and a new EBS disk's top folder belongs to root. minikube's disks let anyone write, so it hadn't shown there. With `fsGroup: 999` on the pod, `helm upgrade` finished in 46 seconds, including the migrations against RDS.
+- `kubectl top pods`, a few minutes later with no traffic: the API pods 169 and 207 MB, the model service 146 MB, the worker 79 MB, and Redis 6 MB. About the same as on the EC2 server and minikube.
+- From an API pod, without writing anything: it read RDS, with `DATABASE_URL` and the JWT key from Parameter Store, and got a prediction from the model service through its Service. No AWS keys were in its environment, only Pod Identity's credentials address. The model service's role was refused Parameter Store (`AccessDeniedException`).
