@@ -4,10 +4,13 @@ Kubernetes accepts a Service whose selector matches no pods, or a port name no c
 and the mistake only shows up as requests that go nowhere. These tests catch that first.
 """
 
+import subprocess
+
 import pytest
 import yaml
 
-from app.config import PROJECT_ROOT
+from app.config import PROJECT_ROOT, Settings
+from ml.service import Settings as ModelSettings
 
 K8S_DIR = PROJECT_ROOT / "infra" / "k8s"
 
@@ -109,3 +112,66 @@ def test_the_migrations_run_once_to_the_latest(resources):
     migrate = resources["Job"]["migrate"]
     assert container(migrate)["command"] == ["alembic", "upgrade", "head"]
     assert pod_spec(migrate)["restartPolicy"] == "Never"
+
+
+# Settings
+
+
+SECRETS_EXAMPLE = K8S_DIR / "secrets.env.example"
+
+
+def secret_keys():
+    """The keys in secrets.env.example, the template for the support-ai-secrets Secret."""
+    lines = SECRETS_EXAMPLE.read_text().splitlines()
+    return {line.split("=")[0] for line in lines if line and not line.startswith("#")}
+
+
+def test_every_configmap_and_secret_the_pods_ask_for_exists(resources):
+    for resource in [*resources["Deployment"].values(), resources["Job"]["migrate"]]:
+        for source in container(resource).get("envFrom", []):
+            if "configMapRef" in source:
+                assert source["configMapRef"]["name"] in resources["ConfigMap"]
+            else:
+                # Made from secrets.env, so it isn't a file here.
+                assert source["secretRef"]["name"] == "support-ai-secrets"
+    assert "secret generic support-ai-secrets" in SECRETS_EXAMPLE.read_text()
+
+
+def test_every_setting_is_one_the_app_reads(resources):
+    api_settings = {name.upper() for name in Settings.model_fields}
+    model_settings = {name.upper() for name in ModelSettings.model_fields}
+    assert set(resources["ConfigMap"]["support-ai-settings"]["data"]) <= api_settings
+    assert secret_keys() <= api_settings
+    assert set(resources["ConfigMap"]["model-settings"]["data"]) <= model_settings
+
+
+def test_keys_are_in_the_secret_and_never_in_a_configmap(resources):
+    for name in Settings.model_fields:
+        if name.endswith(("_key", "_secret", "_token", "database_url")) and "test_" not in name:
+            assert name.upper() in secret_keys()
+    for configmap in resources["ConfigMap"].values():
+        assert not set(configmap["data"]) & secret_keys()
+        for value in configmap["data"].values():
+            # A URL with a password in it, like DATABASE_URL's.
+            assert "@" not in value
+
+
+def test_the_urls_point_at_the_services_here(resources):
+    data = resources["ConfigMap"]["support-ai-settings"]["data"]
+    for url, service in [(data["REDIS_URL"], "redis"), (data["MODEL_SERVICE_URL"], "model")]:
+        [port] = resources["Service"][service]["spec"]["ports"]
+        assert f"://{service}:{port['port']}" in url
+
+
+def test_configmap_values_are_strings(resources):
+    # Kubernetes refuses a ConfigMap with a number in it.
+    for configmap in resources["ConfigMap"].values():
+        assert all(isinstance(value, str) for value in configmap["data"].values())
+
+
+def test_the_filled_in_secrets_file_is_never_committed():
+    # Exits 0 if git ignores the path, and 1 if not.
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", "infra/k8s/secrets.env"], check=False, cwd=PROJECT_ROOT
+    )
+    assert ignored.returncode == 0
