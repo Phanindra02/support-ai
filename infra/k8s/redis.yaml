@@ -1,0 +1,62 @@
+# Redis holds the cache, the rate limit's counters, and the job queue. As in compose, it logs
+# every write to a file (appendonly) on a disk that outlives the pod, so a restart doesn't lose
+# queued jobs, such as a document waiting to be embedded.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+spec:
+  # One node at a time may write to it, which is all one Redis pod needs.
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  # One pod: two would be two separate Redis servers with separate queues.
+  replicas: 1
+  # Stop the old pod before starting the new one. The disk can be attached to one node at a
+  # time, so a new pod started first could wait forever for it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8
+          args: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+# The API and the worker reach it at redis://redis:6379.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

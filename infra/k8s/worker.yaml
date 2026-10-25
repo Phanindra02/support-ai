@@ -1,0 +1,34 @@
+# The worker: runs the jobs the API puts on the queue in Redis (worker/main.py). The API's
+# image and settings, with another command.
+#
+# No Service: nothing calls the worker. It asks Redis for the next job itself, so more pods
+# would share the queue without any load balancer.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    app: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      # On a stop, RQ finishes the job it's running before it exits. Kubernetes' default 30
+      # seconds could cut a long job off halfway, as compose's 10 could.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: support-ai-api
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "worker.main"]
+          envFrom:
+            - configMapRef:
+                name: support-ai-settings
+            - secretRef:
+                name: support-ai-secrets

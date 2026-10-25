@@ -1,0 +1,50 @@
+# The model service: predicts priority and sentiment for the worker (ml/service.py), from its
+# own image, infra/model.Dockerfile.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model
+  labels:
+    app: model
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model
+  template:
+    metadata:
+      labels:
+        app: model
+    spec:
+      containers:
+        - name: model
+          image: support-ai-model
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          # Its own few settings, and not the API's Secret, so none of the API's keys reach it.
+          envFrom:
+            - configMapRef:
+                name: model-settings
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        # Empty when the pod starts, so the service downloads its models from S3 into it. It
+        # lasts as long as the pod, so a container restart in the same pod doesn't download again.
+        - name: models
+          emptyDir: {}
+---
+# Only the worker calls it, at http://model:8000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: model
+spec:
+  selector:
+    app: model
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
