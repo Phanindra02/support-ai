@@ -102,9 +102,37 @@ helm upgrade --install support-ai infra/k8s/support-ai -f infra/k8s/support-ai/v
 
 Urgent alerts are skipped on EKS, with a warning in the worker's log: n8n stays on the EC2 server, out of the cluster's reach.
 
+### HTTPS from the internet
+
+`values-eks.yaml` turns on the chart's Ingress for `support.mysolospark.com`. The AWS Load Balancer Controller turns it into an Application Load Balancer: HTTPS on 443 with a free ACM certificate, and HTTP redirected to HTTPS. Three things come first, once per cluster:
+
+1. **The controller's IAM role.** It's in `eks-cluster.yaml`, so a new cluster gets it with the others. For a cluster made before it was added:
+   ```bash
+   eksctl create podidentityassociation --cluster support-ai --region us-east-2 --namespace kube-system \
+     --service-account-name aws-load-balancer-controller --role-name support-ai-eks-lb-controller \
+     --well-known-policies=awsLoadBalancerController
+   ```
+2. **The certificate**, once per domain, in us-east-2 with the load balancer. ACM checks you own the domain through a CNAME record. The DNS is at Cloudflare, so the record goes there, as **DNS only** (grey cloud), and stays, because ACM renews through it.
+   ```bash
+   aws acm request-certificate --region us-east-2 --domain-name support.mysolospark.com --validation-method DNS
+   aws acm describe-certificate --region us-east-2 --certificate-arn <the ARN> \
+     --query 'Certificate.DomainValidationOptions[0].ResourceRecord'   # the CNAME to add
+   ```
+3. **The controller**, from AWS's Helm chart:
+   ```bash
+   helm repo add eks https://aws.github.io/eks-charts
+   helm install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --version 3.6.2 \
+     --set clusterName=support-ai --set region=us-east-2 --set vpcId=vpc-0f9a361a3857764b0 \
+     --set serviceAccount.name=aws-load-balancer-controller --wait
+   ```
+
+After `helm upgrade` with `values-eks.yaml`, `kubectl get ingress api` shows the load balancer's address. To try it before moving the domain, send a request for the domain to that address: `curl --resolve support.mysolospark.com:443:$(dig +short <address> | head -1) https://support.mysolospark.com/health`.
+
+Moving the domain means changing Cloudflare's `support` record from the EC2 server's IP to a CNAME for the load balancer's address, DNS only. Twilio's webhook URL stays the same. Moving back is the reverse.
+
 ### Deleting it
 
-In this order. The chart's resources first, so the load balancer and Redis's EBS volume, which Kubernetes made in AWS, are deleted with them. Then RDS's rule, because a security group can't be deleted while another one's rule names it.
+In this order. Point the domain back at the EC2 server first. Then the chart's resources, so the load balancer and Redis's EBS volume, which Kubernetes made in AWS, are deleted with them. Then RDS's rule, because a security group can't be deleted while another one's rule names it.
 
 ```bash
 helm uninstall support-ai

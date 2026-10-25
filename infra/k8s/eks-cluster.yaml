@@ -80,6 +80,13 @@ iam:
             Effect: Allow
             Action: s3:GetObject
             Resource: arn:aws:s3:::support-ai-docs-phanindra02/models/*
+    # The AWS Load Balancer Controller, which makes an Application Load Balancer for the
+    # chart's Ingress. eksctl knows the policy it needs (wellKnownPolicies).
+    - namespace: kube-system
+      serviceAccountName: aws-load-balancer-controller
+      roleName: support-ai-eks-lb-controller
+      wellKnownPolicies:
+        awsLoadBalancerController: true
 
 addons:
   # Networking, DNS, and Services: every cluster needs these.

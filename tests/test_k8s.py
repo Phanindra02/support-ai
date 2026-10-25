@@ -337,13 +337,14 @@ def on_eks():
 
 
 def test_each_pod_runs_as_the_service_account_with_its_role(resources, eks):
-    roles = {a["serviceAccountName"]: a for a in eks["iam"]["podIdentityAssociations"]}
+    # The chart's own: kube-system's are add-ons, such as the load balancer controller.
+    associations = eks["iam"]["podIdentityAssociations"]
+    roles = {a["serviceAccountName"]: a for a in associations if a["namespace"] == "default"}
     expected = {"api": "support-ai-app", "worker": "support-ai-app", "model": "support-ai-model"}
     for name, account in expected.items():
         assert pod_spec(resources["Deployment"][name])["serviceAccountName"] == account
     assert pod_spec(resources["Job"]["migrate"])["serviceAccountName"] == "support-ai-app"
     assert set(resources["ServiceAccount"]) == set(roles)
-    assert all(a["namespace"] == "default" for a in roles.values())
 
 
 def test_only_the_model_service_may_read_the_models(eks):
@@ -378,3 +379,39 @@ def test_redis_may_write_to_a_new_ebs_disk(resources):
     # Redis runs as user and group 999, and a new EBS disk's top folder belongs to root. Without
     # this, Redis crashed on EKS with "Permission denied".
     assert pod_spec(resources["Deployment"]["redis"])["securityContext"]["fsGroup"] == 999
+
+
+# The HTTPS Ingress on EKS
+
+
+def test_minikube_has_no_load_balancer_and_trusts_no_proxy(resources):
+    assert "Ingress" not in resources
+    assert "env" not in container(resources["Deployment"]["api"])
+
+
+def test_the_ingress_sends_https_for_the_domain_to_the_api(on_eks):
+    ingress = on_eks["Ingress"]["api"]
+    [rule] = ingress["spec"]["rules"]
+    assert ingress["spec"]["ingressClassName"] == "alb"
+    assert ingress["spec"]["tls"] == [{"hosts": [rule["host"]]}]
+    [path] = rule["http"]["paths"]
+    assert path["backend"]["service"] == {"name": "api", "port": {"name": "http"}}
+    annotations = ingress["metadata"]["annotations"]
+    assert annotations["alb.ingress.kubernetes.io/ssl-redirect"] == "443"
+    # The load balancer checks the same endpoint as the readiness probe.
+    assert annotations["alb.ingress.kubernetes.io/healthcheck-path"] == "/health"
+    # Found by host, so the account's number isn't in the repo.
+    assert "alb.ingress.kubernetes.io/certificate-arn" not in annotations
+
+
+def test_the_load_balancer_uses_the_clusters_public_subnets(on_eks, eks):
+    annotations = on_eks["Ingress"]["api"]["metadata"]["annotations"]
+    subnets = set(annotations["alb.ingress.kubernetes.io/subnets"].split(","))
+    assert subnets == {subnet["id"] for subnet in eks["vpc"]["subnets"]["public"].values()}
+
+
+def test_on_eks_the_api_trusts_forwarded_headers_only_from_the_vpc(on_eks):
+    [variable] = container(on_eks["Deployment"]["api"])["env"]
+    assert variable["name"] == "FORWARDED_ALLOW_IPS"
+    # "*" would let any client make up the IP the rate limit counts.
+    assert variable["value"] == "172.31.0.0/16"
