@@ -1,6 +1,8 @@
 """The jobs the worker runs. The API queues each one by its import path (app/queue.py)."""
 
 import logging
+import random
+import time
 
 import httpx
 from botocore.client import BaseClient
@@ -100,6 +102,16 @@ def embed_document(document_id: int) -> int:
 # The model service answers in milliseconds. Waiting longer than this means it's down or
 # stuck, and the job should fail so RQ tries again later.
 MODEL_SERVICE_TIMEOUT_SECONDS = 5
+# Connecting inside the cluster takes milliseconds, so a second means the pod isn't there.
+MODEL_SERVICE_CONNECT_TIMEOUT_SECONDS = 1
+# A model service pod that's restarting refuses connections, and a proxy in front of it answers
+# 502 to 504, for a second or two. Asking again shortly rides that out inside the job, rather
+# than failing it and waiting for RQ's retry. A prediction changes nothing, so asking twice is
+# safe. Other failures, such as a 422, raise at once, since asking again won't help.
+MODEL_SERVICE_ATTEMPTS = 3
+RETRY_STATUSES = {502, 503, 504}
+# The waits before the second and third attempts are random, up to 0.5 then 1 second.
+RETRY_BASE_SECONDS = 0.5
 # The longest text the model service takes (ml/service.py).
 MAX_PREDICT_CHARS = 10_000
 # A customer is very negative when the sentiment model scores "negative" at least this high.
@@ -119,13 +131,39 @@ def first_message(db: Session, ticket: Ticket) -> str:
     return first.body if first is not None else ""
 
 
+def is_worth_retrying(error: httpx.HTTPError) -> bool:
+    """Whether asking again soon might work: the service was unreachable, slow, or restarting."""
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in RETRY_STATUSES
+    return isinstance(error, httpx.TransportError)
+
+
+def backoff_seconds(attempt: int) -> float:
+    """The wait after the given failed attempt (1, 2, ...): exponential backoff, full jitter.
+
+    The cap doubles each time, and the wait is random below it, so workers that failed together
+    don't all ask again at the same moment.
+    """
+    return random.uniform(0, RETRY_BASE_SECONDS * 2 ** (attempt - 1))
+
+
 def ask_model(client: httpx.Client, name: str, text: str) -> dict:
     """The model service's prediction: the label and each label's score."""
-    response = client.post(
-        f"{settings.model_service_url}/predict/{name}", json={"text": text[:MAX_PREDICT_CHARS]}
-    )
-    response.raise_for_status()
-    return response.json()
+    for attempt in range(1, MODEL_SERVICE_ATTEMPTS + 1):
+        try:
+            response = client.post(
+                f"{settings.model_service_url}/predict/{name}",
+                json={"text": text[:MAX_PREDICT_CHARS]},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as error:
+            if attempt == MODEL_SERVICE_ATTEMPTS or not is_worth_retrying(error):
+                raise
+            wait = backoff_seconds(attempt)
+            logger.info("The model service failed (%r), so asking again in %.2fs", error, wait)
+            time.sleep(wait)
+    raise AssertionError("unreachable: the last attempt returns or raises")
 
 
 def prediction_row(ticket: Ticket, model: ModelName, prediction: dict) -> Prediction:
@@ -193,7 +231,10 @@ def triage(
 
 def triage_ticket(ticket_id: int) -> str | None:
     """The job the API queues for each new ticket. Returns the priority it set."""
-    with SessionLocal() as db, httpx.Client(timeout=MODEL_SERVICE_TIMEOUT_SECONDS) as models:
+    timeout = httpx.Timeout(
+        MODEL_SERVICE_TIMEOUT_SECONDS, connect=MODEL_SERVICE_CONNECT_TIMEOUT_SECONDS
+    )
+    with SessionLocal() as db, httpx.Client(timeout=timeout) as models:
         priority = triage(db, models, get_http_client(), ticket_id)
     if priority is not None:
         # The backlog counts by priority just changed.
