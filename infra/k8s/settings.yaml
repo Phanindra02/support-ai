@@ -1,0 +1,31 @@
+# The settings that aren't secret, as environment variables for the pods (envFrom). The keys
+# are the names in app/config.py and ml/service.py. Keys go in support-ai-secrets instead
+# (secrets.env.example).
+#
+# These values are for minikube. Changing one takes a restart, since the apps read their
+# settings when they start: kubectl rollout restart deployment api worker
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: support-ai-settings
+data:
+  # The Services in this folder, by name.
+  REDIS_URL: redis://redis:6379/0
+  MODEL_SERVICE_URL: http://model:8000
+  # n8n stays outside the cluster. On minikube, it's compose's n8n on the Mac.
+  N8N_WEBHOOK_URL: http://host.minikube.internal:5678/webhook/urgent-ticket
+  S3_BUCKET: support-ai-docs-phanindra02
+  AWS_REGION: us-east-2
+---
+# The model service's own settings. Switching a model to a new version is a change here and
+# a restart (docs/system-design/15-model-rollouts.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-settings
+data:
+  S3_BUCKET: support-ai-docs-phanindra02
+  AWS_REGION: us-east-2
+  # Every value in a ConfigMap is a string, so numbers are quoted.
+  PRIORITY_MODEL_VERSION: "1"
+  SENTIMENT_MODEL_VERSION: "1"

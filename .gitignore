@@ -12,6 +12,7 @@ wheels/
 # Local files that should never be committed
 .DS_Store
 .env
+infra/k8s/secrets.env
 *.db
 scratch.py
 
