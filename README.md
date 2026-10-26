@@ -68,6 +68,7 @@ Python 3.14 and uv, FastAPI, Pydantic v2, SQLAlchemy 2 and Alembic, PostgreSQL w
 - [Results](docs/results.md): every measured number, with how it was measured.
 - [Stage summaries](docs/stages/): what each stage built, the decisions behind it, and how to demo it.
 - [System design notes](docs/system-design/): topics like caching, rate limiting, queues, and retries, as they apply here.
+- [System design practice](docs/system-design/practice/): six classic interview designs, and this platform redesigned for 10 million users.
 - [Roadmap](docs/ROADMAP.md): the build plan, step by step.
 
 ## Run it locally
