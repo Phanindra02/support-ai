@@ -1,8 +1,74 @@
 # Support AI
 
-An AI customer support platform. It starts as a ticket API built with FastAPI and SQLAlchemy, and grows into a WhatsApp bot that answers from your documents and triages tickets with machine learning.
+An AI customer support platform. Customers ask questions on WhatsApp, and a bot answers from the company's help docs and names the doc it used. Questions it can't answer become tickets. Machine learning models set each new ticket's priority and flag angry customers, and the team hears about urgent tickets in Slack.
 
-The build plan is in [docs/ROADMAP.md](docs/ROADMAP.md), and each finished stage is summarized in [docs/stages/](docs/stages/).
+It runs on AWS, deploys itself on every merge to `main`, and was also run on Kubernetes (EKS) with autoscaling. The [design doc](docs/design-doc.md) explains how it works, what breaks first as load grows, and why each choice was made.
+
+## What it does
+
+- **Answers on WhatsApp from the help docs.** A question is embedded, the closest chunks of the docs are found with pgvector, and `gpt-4.1-mini` answers only from them. If the docs don't cover it, the bot says so, and the message becomes a ticket instead of a made-up answer.
+- **Learns new docs in seconds.** An agent uploads a PDF. A Lambda pulls out its text, and a background worker splits it into chunks and embeds them.
+- **Triages tickets.** A model service predicts each new ticket's priority and the customer's mood. A high-priority ticket or a very negative customer posts to Slack through n8n.
+- **Gives agents an API.** Agents log in with JWTs, then list, filter, and update tickets and read conversations. Admins manage agents. The endpoints are in the [API reference](docs/api.md).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    customer(["Customer on WhatsApp"]) --> twilio["Twilio"]
+    twilio -->|"POST /webhooks/twilio, signed"| caddy
+    agent(["Support agent"]) -->|"HTTPS, JWT"| caddy
+
+    subgraph ec2 ["EC2 t4g.small, docker compose"]
+        caddy["Caddy, HTTPS"] --> api["API, FastAPI"]
+        api --> redis[("Redis: cache, rate limit, queue")]
+        redis --> worker["RQ worker"]
+        worker -->|"/predict"| model["Model service"]
+        worker --> n8n["n8n"]
+        api --> n8n
+    end
+
+    api --> rds[("RDS Postgres with pgvector")]
+    worker --> rds
+    api -->|"embed and answer"| openai["OpenAI"]
+    worker -->|"embed chunks"| openai
+    api -->|"upload PDF"| s3[("S3")]
+    s3 -->|"new PDF"| lambda["Lambda: PDF to text"]
+    lambda -->|"text"| s3
+    lambda -->|"POST /webhooks/document-processed"| caddy
+    worker -->|"read text"| s3
+    model -->|"models at start"| s3
+    n8n --> slack(["Slack channel"])
+```
+
+The API answers within Twilio's 15-second limit, so anything slow (embedding a doc, triaging a ticket, alerting Slack) runs as a job on the worker. Only Postgres is essential: if OpenAI, Redis, the model service, or n8n is down, customers still get a reply and tickets are still saved. Secrets live in AWS Parameter Store, and AWS access comes from IAM roles, so no keys sit in the code, on the server, or in GitHub.
+
+## Results
+
+Every number here was measured, and [docs/results.md](docs/results.md) says how.
+
+| What | Result |
+| --- | --- |
+| Ticket list query on 100,000 tickets | First page **11.07 ms → 0.02 ms** with an index on `(created_at, id)`, about **550x** faster. A deep page only got about 3x faster, which is why cursor pagination is noted as the next step. |
+| Dashboard counts with a Redis cache | **0.7 to 1.0 ms** median on a hit, against 5.8 to 6.2 ms counting in Postgres: **6 to 8.5x** faster, and Postgres runs 2 count queries a minute however many agents are watching. |
+| Ticket priority model | Macro F1 **0.709** on 3,268 test tickets, up from a 0.594 baseline, by tuning Logistic Regression on TF-IDF with cross-validation. It beat XGBoost by about 0.09. |
+| Customer mood model | Macro F1 **0.743** on 2,856 test messages. At the alert threshold, **99.1%** of flagged messages really are negative. |
+| Bot on 25 test questions | Retrieval found the answer for **24/24** answerable questions, and **25/25** replies were right and named the right doc, including "I don't know" for the one the docs don't answer. The test set is small, so it can't tell chunk sizes apart. |
+| Load test on EKS | **182 requests a second** from 200 simulated agents, **34 ms** median and **130 ms** at the 95th percentile, **1 error in 87,244**. The autoscaler took the API from **2 to 6 pods** within about a minute. |
+| Tests | **More than 750** pytest tests, run with the linter on every pull request. |
+
+## Built with
+
+Python 3.14 and uv, FastAPI, Pydantic v2, SQLAlchemy 2 and Alembic, PostgreSQL with pgvector, Redis and RQ, LangChain with OpenAI, scikit-learn and XGBoost, Twilio WhatsApp, n8n and Slack, Docker, GitHub Actions, AWS (EC2 on Graviton, RDS, S3, Lambda, ECR, Parameter Store, IAM), and Kubernetes (minikube, EKS, Helm).
+
+## Docs
+
+- [Design doc](docs/design-doc.md): requirements, scale estimates, architecture, data model, bottlenecks, and trade-offs.
+- [API reference](docs/api.md): the endpoints, their rules, and its status codes. The running API also serves interactive docs at `/docs`.
+- [Results](docs/results.md): every measured number, with how it was measured.
+- [Stage summaries](docs/stages/): what each stage built, the decisions behind it, and how to demo it.
+- [System design notes](docs/system-design/): topics like caching, rate limiting, queues, and retries, as they apply here.
+- [Roadmap](docs/ROADMAP.md): the build plan, step by step.
 
 ## Run it locally
 
@@ -95,7 +161,9 @@ Every push, to any branch, runs [.github/workflows/ci.yml](.github/workflows/ci.
 
 - **lint** runs `uv run ruff check .`.
 - **test** runs `uv run pytest`, against Postgres 16 and Redis 8 started as service containers next to the job. Each run makes its own random `JWT_SECRET_KEY`.
-- **image** runs once both pass. It builds the API's image on an ARM runner, and checks that it starts and doesn't run as root. On `main` it then pushes the image to Amazon ECR as `support-ai-api`, tagged `sha-<commit>` (which ECR never lets change) and `latest`, for EC2 to pull. CI logs in to AWS with a short-lived token from GitHub (OIDC), so no AWS keys are stored in GitHub. [infra/aws/README.md](infra/aws/README.md) explains the role it uses. No settings or secrets go into the image. They're given to a container when it runs.
+- **image** runs once both pass. It builds the API's image and the model service's on an ARM runner, and checks that they don't run as root. On `main` it then pushes them to Amazon ECR as `support-ai-api` and `support-ai-model`, tagged `sha-<commit>` (which ECR never lets change) and `latest`, for EC2 to pull. CI logs in to AWS with a short-lived token from GitHub (OIDC), so no AWS keys are stored in GitHub. [infra/aws/README.md](infra/aws/README.md) explains the role it uses. No settings or secrets go into the image. They're given to a container when it runs.
+- **deploy** runs on `main` after `image`. It tells the EC2 server, through SSM Run Command, to pull the new images, run the migrations, and restart, then checks that the live API answers over HTTPS. [docs/rollback.md](docs/rollback.md) shows how to go back to an earlier image.
+- **deploy-eks** runs `helm upgrade` on the EKS cluster, but only while the repository variable `EKS_CLUSTER` is set. The cluster is deleted now, so it's skipped.
 
 Both install with `uv sync --locked`, which fails if `uv.lock` is out of date, and use the same uv version as the Mac and the Dockerfile. To run the same checks before pushing: `uv run ruff check . && uv run pytest`.
 
@@ -111,315 +179,18 @@ gh pr checks --watch                     # wait for the three checks
 gh pr merge --merge --delete-branch      # merge once they pass
 ```
 
-If `main` moves on while a pull request is open, the branch has to be brought up to date first (`gh pr update-branch`), so the checks run again against the newest `main`. The merge to `main` is a push like any other, so CI runs again there and publishes the image.
-
-## API
-
-| Method | Path | What it does | Who | Success |
-| --- | --- | --- | --- | --- |
-| `POST` | `/auth/token` | Log in as an agent and get an access token | Anyone | 200 |
-| `GET` | `/agents/me` | The agent who is logged in | Agents | 200 |
-| `GET` | `/agents` | List every agent | Admins | 200 |
-| `POST` | `/agents` | Add an agent | Admins | 201 |
-| `PATCH` | `/agents/{agent_id}` | Change an agent's name, password, role, or active flag | Admins | 200 |
-| `GET` | `/tickets` | List tickets, newest first, with filters and pagination | Agents | 200 |
-| `POST` | `/tickets` | Open a ticket for a customer | Agents | 201 |
-| `GET` | `/tickets/{ticket_id}` | Get one ticket | Agents | 200 |
-| `GET` | `/tickets/{ticket_id}/messages` | Get a ticket's conversation, oldest message first | Agents | 200 |
-| `PATCH` | `/tickets/{ticket_id}` | Change a ticket's status, priority, or both | Agents | 200 |
-| `GET` | `/stats` | Ticket counts for the dashboard, cached for 60 seconds | Agents | 200 |
-| `POST` | `/documents` | Upload a help doc (a PDF) to S3 | Agents | 201 |
-| `POST` | `/webhooks/twilio` | Receive a customer's WhatsApp message | Twilio | 200 |
-| `POST` | `/webhooks/document-processed` | Mark a help doc processed, once its text is in S3 | The Lambda | 200 |
-
-"Agents" means any logged-in agent, admins included. Every endpoint except logging in and the two webhooks needs the token described next. The curl examples below leave the header out to stay short.
-
-### Log in
-
-Agents log in with their email and password, and get back a signed access token (a JWT) that works for 30 minutes:
-
-```bash
-curl -X POST http://127.0.0.1:8000/auth/token \
-  -d "username=you@example.com" --data-urlencode "password=your password"
-```
-
-```json
-{"access_token": "eyJhbGciOiJIUzI1NiIs...", "token_type": "bearer"}
-```
-
-The body is a form, not JSON, and the email goes in the `username` field, because that's what the OAuth2 standard says. A wrong email or password gets a `401` with `{"detail": "Incorrect email or password"}`, the same either way, so it doesn't reveal which emails have accounts.
-
-Send the token on later requests in the `Authorization` header:
-
-```bash
-curl http://127.0.0.1:8000/agents/me -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
-```
-
-A missing, expired, or tampered token gets a `401`, and so does a token for an agent who has been deactivated since logging in. In `/docs`, the **Authorize** button logs in and sends the token for you.
-
-Passwords are stored only as Argon2 hashes, and need 15 to 128 characters. The seed script's agents have no password until one is set, so they can't log in.
-
-### Roles and agent management
-
-Each agent is an `agent` or an `admin`. Agents read and update tickets. Admins can do that too, and they also manage agents. An agent who calls an admin endpoint gets a `403`.
-
-The first admin comes from the command line, because only an admin can add agents through the API. The script asks for the password, so it never lands in your shell history:
-
-```bash
-uv run python -m scripts.create_agent --email you@example.com --name "Your Name" --admin
-```
-
-Run it again with the same email to set a new password. After that, admins manage agents through the API:
-
-```bash
-curl -X POST http://127.0.0.1:8000/agents -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Sam Lee", "email": "sam.lee@example.com", "password": "correct horse battery staple"}'
-
-curl -X PATCH http://127.0.0.1:8000/agents/2 -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{"is_active": false}'
-```
-
-- `role` is `agent` unless you send `"admin"`. Emails are stored lowercase, and a taken email gets a `409`.
-- A `PATCH` can change `name`, `password`, `role`, and `is_active`, in any mix. The email can't change, because it's the login.
-- Setting `is_active` to `false` locks the agent out at once, even with a token that hasn't expired, because every request looks the agent up. Their tickets keep pointing to them.
-- Admins can't demote or deactivate themselves (`403`), so at least one admin always remains.
-
-### A ticket
-
-```json
-{
-  "id": 1,
-  "customer": {"id": 1, "name": "Jane Doe", "phone": "+16145550123"},
-  "agent_id": null,
-  "subject": "Order late",
-  "status": "open",
-  "priority": "medium",
-  "created_at": "2026-10-18T21:35:49.123456Z",
-  "closed_at": null
-}
-```
-
-- `customer` is who opened the ticket. A phone number belongs to one customer.
-- `agent_id` is the agent handling the ticket, or `null` until someone picks it up.
-- `status` is `open`, `pending`, or `closed`. New tickets start `open`.
-- `priority` is `low`, `medium`, `high`, or `urgent`. New tickets start `medium`.
-- The server sets `created_at`. It sets `closed_at` when the ticket closes, and clears it if the ticket reopens.
-- Times are UTC, marked with a `Z`.
-
-### Open a ticket
-
-```bash
-curl -X POST http://127.0.0.1:8000/tickets \
-  -H "Content-Type: application/json" \
-  -d '{"customer_name": "Jane Doe", "phone": "+16145550123", "subject": "Order late", "message": "Where is my order?"}'
-```
-
-Agents use this to open a ticket for a customer, such as after a phone call. Customers open their own tickets through WhatsApp. Returns `201 Created` with the new ticket. The server finds the customer by phone number, or adds them if the number is new. A returning customer keeps the name they gave first. The message becomes the first one in the ticket's conversation. All four fields are required:
-
-| Field | Rule |
-| --- | --- |
-| `customer_name` | 1 to 100 characters, after trimming spaces from both ends |
-| `phone` | E.164 format: a `+`, then 2 to 15 digits, not starting with 0, like `+16145550123` |
-| `subject` | 1 to 200 characters, after trimming spaces |
-| `message` | 1 to 5,000 characters, after trimming spaces |
-
-Any other field, like `status`, gets a 422, because customers can't set it. Text can't contain the NUL character (`\u0000`).
-
-### List tickets
-
-```bash
-curl "http://127.0.0.1:8000/tickets?status=open&priority=urgent&skip=0&limit=20"
-```
-
-| Query parameter | Default | Rule |
-| --- | --- | --- |
-| `status` | any | `open`, `pending`, or `closed` |
-| `priority` | any | `low`, `medium`, `high`, or `urgent` |
-| `skip` | `0` | How many tickets to pass over: 0 to 2,147,483,647 |
-| `limit` | `20` | How many tickets to return: 1 to 100 |
-
-**Pagination:** results are sorted newest first, by `created_at` and then by `id`, so tickets created in the same second keep a fixed order between requests. To page through, keep `limit` the same and add it to `skip` each time: `skip=0`, `skip=20`, `skip=40`, and so on. A page with fewer than `limit` tickets is the last one, and a page past the end is an empty list, `[]`.
-
-### Get one ticket
-
-```bash
-curl http://127.0.0.1:8000/tickets/1
-```
-
-### Get a ticket's messages
-
-```bash
-curl http://127.0.0.1:8000/tickets/1/messages
-```
-
-```json
-[
-  {"id": 1, "sender": "customer", "body": "Where is my order?", "created_at": "2026-10-18T21:35:49.123456Z"},
-  {"id": 2, "sender": "agent", "body": "It ships today.", "created_at": "2026-10-18T22:10:02.402114Z"}
-]
-```
-
-`sender` is `customer`, `agent`, or `bot` (the WhatsApp bot, from Stage 6). A ticket that doesn't exist gets a 404.
-
-### Update a ticket
-
-```bash
-curl -X PATCH http://127.0.0.1:8000/tickets/1 \
-  -H "Content-Type: application/json" \
-  -d '{"status": "closed"}'
-```
-
-Send `status`, `priority`, or both. A body with neither, or with any other field, gets a 422. Changing a ticket's priority to `urgent` also posts it to the team's Slack channel (see [Urgent ticket alerts](#urgent-ticket-alerts)). Closing a ticket sets `closed_at`, closing it again keeps the first time, and reopening it (to `open` or `pending`) clears it. Sending the same update twice has the same effect as sending it once.
-
-### Ticket counts
-
-```bash
-curl -i http://127.0.0.1:8000/stats
-```
-
-```json
-{
-  "by_status": {"open": 4701, "pending": 2546, "closed": 92753},
-  "backlog_by_priority": {"low": 2768, "medium": 3069, "high": 1030, "urgent": 380}
-}
-```
-
-`by_status` counts every ticket. `backlog_by_priority` counts the tickets not closed yet (open or pending), which is the work still waiting.
-
-The counts are cached in Redis for 60 seconds, and the cache is cleared whenever a ticket is created or updated, so they're always current. The `X-Cache` header says `HIT` if they came from the cache, or `MISS` if they were just counted in the database. If Redis is down, the API counts in the database every time instead of failing.
-
-### Rate limit
-
-Each IP address may make 60 requests in any 60 seconds, to every endpoint together. Request number 61 gets a `429 Too Many Requests`, with a `Retry-After` header saying how many seconds until one of the earlier requests is a minute old:
-
-```json
-{"detail": "Too many requests. Try again in 42 seconds."}
-```
-
-The window slides with each request instead of resetting on the minute, so sending 60 requests just before a minute ends and 60 more just after doesn't work. Requests that get a 429 don't count toward the limit. Set `RATE_LIMIT_PER_MINUTE` to change the limit. If Redis is down, requests aren't limited.
-
-### WhatsApp webhook
-
-Twilio calls `POST /webhooks/twilio` for each WhatsApp message a customer sends, with the message as a form, and reads the reply from the response as TwiML (XML).
-
-Each message becomes part of a ticket:
-
-- **The customer** is found by their WhatsApp number, or added, named after their WhatsApp profile (or their number, if they have no profile name). A customer an agent already added keeps their name.
-- **The ticket** is their newest open or pending ticket. If they have none, a new ticket opens, with the first line of the message as its subject (cut to 80 characters).
-- **A reply to a pending ticket** makes it open again. Pending means the team is waiting on the customer, so once they answer, it's the team's turn.
-- **Messages sent at once** by the same customer land on one ticket. Each request locks the customer's row (`SELECT ... FOR UPDATE`) while it works, so a second message waits for the first instead of opening a second ticket.
-- A message with no text, such as a photo, is stored as a note saying so. Media isn't saved yet.
-- **A repeat delivery changes nothing.** Twilio can send the same message twice, with the same `MessageSid`, such as when it gave up waiting for the first response. Each stored message keeps its `MessageSid` in a unique column, so a repeat isn't stored again, doesn't reopen a ticket or open a new one, and gets the same reply as the first delivery. Twilio only repeats a delivery when it didn't use the first reply.
-- **A message that opens a ticket gets a reply:** "Thanks, we got your message. Your ticket number is 42, and someone from our team will reply here soon." The reply goes back in the response as TwiML, so Twilio sends it without another API call. Later messages on the same ticket get no reply, so a customer who sends five short messages isn't sent five confirmations.
-
-- **Only Twilio can call it.** Twilio signs each request with the account's auth token, in the `X-Twilio-Signature` header. A request with a missing or wrong signature gets a `403`. Until `TWILIO_AUTH_TOKEN` is set in `.env`, every request gets a `503`.
-- **No IP rate limit.** Every customer's message arrives from Twilio's servers, so a limit per IP would hold all customers back together.
-- **Behind ngrok,** the signature covers the public `https://` URL Twilio called. uvicorn rebuilds that URL from the `Host` header and from ngrok's `X-Forwarded-Proto` header, which it trusts because ngrok connects from 127.0.0.1.
-
-### Urgent ticket alerts
-
-When an agent changes a ticket's priority to `urgent`, the API posts the ticket to an n8n webhook (`N8N_WEBHOOK_URL`), and the n8n workflow in `infra/n8n/` posts it to Slack:
-
-```json
-{"ticket_id": 42, "subject": "Card charged twice", "customer_name": "Jane Doe", "status": "open",
- "priority": "urgent", "created_at": "2026-10-19T14:02:11.520331Z", "marked_urgent_by": "Ada Lovelace"}
-```
-
-- Only the API can trigger the workflow. Each call carries a shared secret in the `X-Webhook-Secret` header (`N8N_WEBHOOK_SECRET`), and n8n's Header Auth rejects any call without it. No alerts are sent until the secret is set.
-- Only a change to urgent sends an alert. Sending `urgent` again for a ticket that already is sends nothing.
-- The call runs after the response is sent (a FastAPI background task), so the agent never waits on n8n or Slack.
-- If n8n is down or answers with an error, the update still succeeds, and a warning is logged. Nothing retries yet. Stage 6's job queue can.
-- The customer's phone number is left out. The channel doesn't need it.
-
-To run n8n, connect Slack, and import the workflow, follow [infra/n8n/README.md](infra/n8n/README.md).
-
-### Upload a help doc
-
-An agent sends a PDF as the multipart form field `file`. The API saves it to the private S3 bucket and records it as `uploaded`. S3 then runs a Lambda function (`lambda/extract_text.py`), which pulls out the text, saves it to S3, and marks the document `processed`. In Stage 6 the WhatsApp bot answers from that text.
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" -F "file=@returns-policy.pdf" http://127.0.0.1:8000/documents
-```
-
-```json
-{"id": 1, "filename": "returns-policy.pdf", "size_bytes": 641, "status": "uploaded",
- "uploaded_by_id": 1, "created_at": "2026-10-23T04:09:22.919392Z"}
-```
-
-- **Only PDFs, up to 10 MiB.** The file must start with `%PDF-`, as every PDF does. The filename and Content-Type are whatever the client says, so neither is trusted. Anything else gets a 422, and a bigger file gets a 413.
-- **Oversized requests are stopped as they arrive.** FastAPI reads a whole body before it checks the login, so `app/body_limit.py` refuses any request body over about 10 MiB with a 413 first: at once if its `Content-Length` says so, or as soon as that many bytes have arrived if it doesn't. Without it, anyone could make the server write an upload of any size to disk. It covers every endpoint, so no JSON body can fill the memory either.
-- **The filename** is trimmed, must be 1 to 255 characters, and can't contain the NUL character. It's only ever shown, never used as a path.
-- **Each upload gets its own key** in S3, like `uploads/7020...001c.pdf`, made from a random UUID. Two files named `manual.pdf` never overwrite each other. The key stays out of the response.
-- **S3 first, then the database.** The row is saved only once the file is in S3, so a row never points to a missing file.
-- **A 503 means S3 isn't ready:** `S3_BUCKET` is empty, or S3 refused the upload or couldn't be reached, such as with no AWS credentials. Nothing is saved, and the agent can try again.
-
-### Mark a help doc processed
-
-Only the Lambda calls this, after saving a PDF's text to S3. It sends the shared secret in `X-Webhook-Secret`, and the two keys: the upload's, which finds the document, and where the text is. [infra/aws/README.md](infra/aws/README.md#pulling-the-text-out-of-uploads-lambda) explains the Lambda.
-
-It marks the document `processed`, then queues a job for the worker, which reads the text from S3, splits it into chunks of about 1,000 characters, embeds them with OpenAI's `text-embedding-3-small` in one call, and saves them to the `chunks` table (`worker/jobs.py`). The Lambda doesn't wait for that. The worker needs `OPENAI_API_KEY`, and the tests never use it: they empty it, and use LangChain's fake embeddings.
-
-```bash
-curl -H "X-Webhook-Secret: $LAMBDA_WEBHOOK_SECRET" -H "Content-Type: application/json" \
-  -d '{"s3_key": "uploads/7020...001c.pdf", "text_s3_key": "text/7020...001c.txt"}' \
-  http://127.0.0.1:8000/webhooks/document-processed
-```
-
-- **A wrong or missing secret gets a 403,** checked before the body is read, and the check takes as long however much of the secret is right. Until `LAMBDA_WEBHOOK_SECRET` is set, every call gets a 503.
-- **The keys must look like the ones the API and the Lambda make** (`uploads/` or `text/`, 32 hex digits, `.pdf` or `.txt`), or it's a 422.
-- **A 404 means no document has that key.** Usually the PDF reached S3, which started the Lambda, just before `POST /documents` saved the row. The Lambda fails, and Lambda runs it again a minute later.
-- **Calling it twice is harmless.** Lambda retries, and S3 can deliver the same event twice. Marking a processed document again changes nothing, and the job it queues again replaces the document's chunks, so the bot keeps one copy of each.
-- **If Redis can't be reached, it's a 503.** The row is already saved, and the Lambda fails on the 503, so Lambda runs it again, and that call queues the job.
-- **It isn't rate limited per IP.** Like Twilio's, every call comes from the same cloud's addresses, and the secret is checked first.
-
-### Status codes
-
-| Code | When |
-| --- | --- |
-| 200 OK | A list, a ticket, or an updated ticket |
-| 201 Created | A new ticket was opened, or a document was uploaded |
-| 401 Unauthorized | The login failed, or the request's token is missing, expired, or invalid |
-| 403 Forbidden | The agent is logged in but isn't allowed to do this, such as a non-admin managing agents |
-| 404 Not Found | No ticket or agent has that id |
-| 409 Conflict | An agent with that email already exists |
-| 422 Unprocessable Content | The input breaks a rule: a missing, unknown, or invalid field, or an id, `skip`, or `limit` out of range |
-| 413 Content Too Large | An uploaded file is over 10 MiB, or any request body is over the app's limit |
-| 429 Too Many Requests | This IP made more than 60 requests in the last 60 seconds |
-| 503 Service Unavailable | A setting the endpoint needs is empty (`TWILIO_AUTH_TOKEN` or `S3_BUCKET`), or S3 couldn't save an upload |
-
-A 404 returns:
-
-```json
-{"detail": "Ticket not found"}
-```
-
-A 422 returns FastAPI's standard list of errors. `loc` says where the problem is, and `msg` says what's wrong:
-
-```json
-{
-  "detail": [
-    {
-      "type": "string_pattern_mismatch",
-      "loc": ["body", "phone"],
-      "msg": "String should match pattern '^\\+[1-9][0-9]{1,14}$'",
-      "input": "614-555-0123",
-      "ctx": {"pattern": "^\\+[1-9][0-9]{1,14}$"}
-    }
-  ]
-}
-```
-
-Ticket ids run from 1 to 2,147,483,647, the largest value a PostgreSQL integer column can hold. An id outside that range gets a 422, and an id in range with no ticket gets a 404. No input should ever cause a 500.
+If `main` moves on while a pull request is open, the branch has to be brought up to date first (`gh pr update-branch`), so the checks run again against the newest `main`. The merge to `main` is a push like any other, so CI runs again there, publishes the images, and deploys them.
 
 ## Project layout
 
 - `app/`: the API. `main.py` creates the app, `routers/` has the endpoints (one file per area), `models.py` the database tables, `schemas.py` the request and response shapes, `database.py` the database connection, `cache.py` the Redis cache, `rate_limit.py` the rate limit, `storage.py` the S3 uploads, `queue.py` the job queue, and `config.py` the settings.
-- `worker/`: the background worker, which runs the jobs on the queue (`main.py`).
+- `worker/`: the background worker, which runs the jobs on the queue (`main.py`): embedding help docs and triaging tickets.
+- `ml/`: preparing the datasets, training and tuning the models (`train.py`, `tune.py`), and the model service that serves them (`service.py`).
+- `lambda/`: the Lambda that pulls the text out of uploaded PDFs.
 - `alembic/`: database migrations.
 - `docker-compose.yml`: the whole stack in containers. It sits at the root so `docker compose` finds it, and the `.env` beside it, without flags.
-- `infra/`: the Dockerfile for the API and the worker (`api.Dockerfile`), the exported [n8n workflow](infra/n8n/README.md), the [rules that protect main](infra/github/README.md), and the [AWS setup](infra/aws/README.md).
+- `infra/`: the Dockerfiles for the API and worker (`api.Dockerfile`) and the model service (`model.Dockerfile`), the [Kubernetes manifests and Helm chart](infra/k8s/README.md), the exported [n8n workflow](infra/n8n/README.md), the [rules that protect main](infra/github/README.md), and the [AWS setup](infra/aws/README.md).
 - `.github/workflows/ci.yml`: the CI workflow.
-- `scripts/`: the seed script, the weekly report, and the scripts that measure the list query and the cache.
+- `scripts/`: the seed script, the weekly report, the agent script, and the scripts that measure the list query, the cache, the bot, and the load (`locustfile.py`).
 - `tests/`: pytest tests.
-- `docs/`: the roadmap, stage summaries, [measured results](docs/results.md), and [system design notes](docs/system-design/).
+- `docs/`: the [design doc](docs/design-doc.md), the [API reference](docs/api.md), the roadmap, stage summaries, [measured results](docs/results.md), [system design notes](docs/system-design/), and the sample help docs.
