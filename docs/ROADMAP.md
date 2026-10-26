@@ -218,7 +218,7 @@ EKS bills by the hour. Get a yes before creating the cluster, and delete it as s
 Done when: the developer can design a common system out loud in 45 minutes, and the platform has a written design doc.
 
 - [x] Write a design doc for the platform in `docs/design-doc.md`: requirements, scale estimates, architecture diagram, data model, bottlenecks, and trade-offs. **[You]** Review it until you can defend every part.
-- [ ] **[You]** Learn the interview flow and quick estimates, then do timed 45-minute designs of a URL shortener, a rate limiter, a notification system, a chat app, a news feed, and Dropbox-like file storage.
+- [x] **[You]** Learn the interview flow and quick estimates, then do timed 45-minute designs of a URL shortener, a rate limiter, a notification system, a chat app, a news feed, and Dropbox-like file storage. Written by Claude Code at your request, which overrode the rule against doing this practice for you: the flow and estimates in `docs/system-design/practice/00-interview-flow-and-estimates.md`, and the six designs in `01` to `06`, each following the same 45-minute flow. **[You]** They're worked answers, not the practice itself: time yourself designing each one out loud before you read it.
 - [ ] **[You]** Redesign the platform for 10 million users, and compare it to what you built.
 - [ ] **[You]** Do at least three mock interviews.
 
