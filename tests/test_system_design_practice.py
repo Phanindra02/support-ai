@@ -14,6 +14,7 @@ DESIGNS = [
     "04-chat-app.md",
     "05-news-feed.md",
     "06-file-storage.md",
+    "07-support-ai-at-10-million-users.md",
 ]
 # The steps of the 45-minute flow in 00-interview-flow-and-estimates.md.
 FLOW = [
@@ -43,3 +44,8 @@ def test_links_point_to_files_that_exist(path):
     for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", path.read_text()):
         if not target.startswith("http"):
             assert (path.parent / target).exists(), target
+
+
+def test_the_redesign_compares_itself_with_what_was_built():
+    redesign = (PRACTICE / "07-support-ai-at-10-million-users.md").read_text()
+    assert "| Part | Built | At 10 million | Why |" in redesign
