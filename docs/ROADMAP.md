@@ -226,10 +226,10 @@ Done when: the developer can design a common system out loud in 45 minutes, and 
 
 Done when: someone can understand, run, and see the project in a few minutes, and the resume uses real numbers.
 
-- [ ] Write the README with an architecture diagram, setup steps, screenshots, and a link to the design doc.
+- [ ] Write the README with an architecture diagram, setup steps, screenshots, and a link to the design doc. Written, with the diagram, setup, results, and design doc link, and the endpoint reference moved to `docs/api.md` so the README stays short. **[You]** Screenshots still to add: the WhatsApp answer and the Slack alert need your phone and workspace.
 - [ ] **[You]** Record a 2–3 minute demo: ask a question on WhatsApp and get an answer from the docs, then send an angry message and show the Slack alert.
-- [ ] List the real numbers from `docs/results.md`: index speedup, cache latency, model F1, retrieval accuracy, and load-test results.
-- [ ] Draft resume bullets from those numbers. **[You]** Edit them into your resume.
+- [x] List the real numbers from `docs/results.md`: index speedup, cache latency, model F1, retrieval accuracy, and load-test results. The README's Results table, and a test checks that each one still appears in `docs/results.md`.
+- [x] Draft resume bullets from those numbers. **[You]** Edit them into your resume. `docs/resume-bullets.md`, with what to be ready to explain about each number.
 
 ## The developer's own practice (not for Claude Code)
 
