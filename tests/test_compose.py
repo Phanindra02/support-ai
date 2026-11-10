@@ -158,7 +158,8 @@ def test_on_ec2_the_app_loads_its_secrets_from_parameter_store(ec2_services):
         environment = ec2_services[name]["environment"]
         assert environment["PARAMETER_STORE_PATH"] == "/support-ai"
         # An environment variable would win over Parameter Store, so the container's URL from
-        # docker-compose.yml is dropped, not replaced.
+        # docker-compose.yml is dropped, not replaced. The DATABASE_URL line in the server's .env
+        # decides instead: empty for RDS's URL in Parameter Store, or the container's after the move.
         assert environment["DATABASE_URL"] == RESET
 
 
@@ -191,10 +192,34 @@ def test_on_ec2_the_api_and_the_worker_still_ask_the_model_container(ec2_service
         assert "MODEL_SERVICE_URL" not in ec2_services[name]["environment"]
 
 
-def test_on_ec2_the_postgres_container_never_starts(ec2_services):
-    assert ec2_services["postgres"]["profiles"]
-    # The migrations would otherwise wait for a container that never starts.
-    assert ec2_services["migrate"]["depends_on"] == RESET
+def test_on_ec2_postgres_runs_on_a_volume_of_its_own(ec2_compose, ec2_services, services):
+    postgres = ec2_services["postgres"]
+    assert "profiles" not in postgres
+    # Not docker-compose.yml's postgres-data, which on the server may still hold the data from
+    # before the move to RDS, and Postgres would start on it.
+    assert postgres["volumes"] == ["server-postgres-data:/var/lib/postgresql/data"]
+    assert "server-postgres-data" in ec2_compose["volumes"]
+    assert "postgres-data:/var/lib/postgresql/data" in services["postgres"]["volumes"]
+
+
+def test_on_ec2_the_migrations_wait_for_postgres(ec2_services, services):
+    # compose.ec2.yml leaves depends_on alone, so the migrations wait for a healthy container,
+    # which they run against once the app has moved onto it.
+    assert "depends_on" not in ec2_services["migrate"]
+    assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+def test_the_move_points_the_app_at_the_url_compose_gives_the_containers(api_environment):
+    readme = (PROJECT_ROOT / "infra" / "aws" / "README.md").read_text()
+    # Each sed in the AWS README that rewrites the DATABASE_URL line in the server's .env.
+    switch, way_back = re.findall(r"s\|\^DATABASE_URL=\.\*\|DATABASE_URL=([^|]*)\|", readme)
+    # Emptying the line hands the setting back to Parameter Store, which has RDS's URL.
+    assert way_back == ""
+    url, container = make_url(switch), make_url(api_environment["DATABASE_URL"])
+    assert url.set(password="") == container.set(password="")
+    # The password is the POSTGRES_PASSWORD that docker-compose.yml's URL uses.
+    assert url.password == "${PASSWORD}"
+    assert "PASSWORD=$(sed -n 's/^POSTGRES_PASSWORD=//p' .env)" in readme
 
 
 def test_the_servers_env_turns_the_ec2_file_on():

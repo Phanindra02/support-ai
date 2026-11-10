@@ -231,6 +231,24 @@ Done when: someone can understand, run, and see the project in a few minutes, an
 - [x] List the real numbers from `docs/results.md`: index speedup, cache latency, model F1, retrieval accuracy, and load-test results. The README's Results table, and a test checks that each one still appears in `docs/results.md`.
 - [x] Draft resume bullets from those numbers. **[You]** Edit them into your resume. `docs/resume-bullets.md`, with what to be ready to explain about each number.
 
+## Stage 10: Postgres on the server instead of RDS
+
+Done when: the app runs on the server's Postgres container, a backup reaches S3 every night and has been restored once, and RDS is deleted.
+
+RDS was about $14 of a bill near $19 a month, for a database of a few megabytes. The container costs nothing more, and a nightly dump to S3 takes over RDS's backups. The steps are in `infra/aws/README.md`, under "Move the database back onto the server".
+
+- [x] Run Postgres on the server next to RDS, without moving the app yet. `infra/aws/compose.ec2.yml` starts the container again, on a new volume (`server-postgres-data`), and the app stays on RDS until the `DATABASE_URL` line in the server's `.env` names the container. Merging changes nothing the app uses.
+- [x] Back the database up to S3 every night, and keep each backup 14 days. `infra/aws/backup-database.sh` runs `pg_dump`, then `scripts/upload_backup.py`, which uploads under `backups/` with the instance role. `SaveDatabaseBackups` lets the role add backups but not read or delete them, and `infra/aws/docs-bucket-lifecycle.json` deletes them after 14 days. Built in the same commit as the step above, because the move takes the first backup. The move, the backup, and both kinds of restore were tried on two local Postgres 16 clusters standing in for RDS and the container, and the row counts matched.
+- [ ] **[You]** Apply the new permission and the lifecycle rules from the Mac. On the server, record `free -m`, copy RDS into the container, compare the row counts, and switch `DATABASE_URL`. Then add the cron line, run the first backup by hand, and record `free -m` again in `docs/results.md`.
+- [ ] **[You]** Restore the newest backup into a scratch database on the server and check its row counts. Time it, and record the time in `docs/results.md`.
+- [ ] **[You]** After a week on the container, with a backup every night, delete RDS, its subnet group, and its security group.
+- [ ] Contract: remove the `DATABASE_URL: !reset null` lines, so the server uses the container's URL from `docker-compose.yml`. Update `docs/rollback.md`, the design doc's diagram, tables, and costs, and the AWS README, and write `docs/stages/10-postgres-on-server.md`. **[You]** Then delete the `DATABASE_URL` line from the server's `.env` and the `/support-ai/DATABASE_URL` parameter.
+
+### System design
+
+- [x] Learn RPO and RTO, full dumps against point-in-time recovery, and managed against self-run databases. See `docs/system-design/18-backups-and-managed-databases.md`.
+- [x] Apply it: write down what the move changes about recovery. The same file compares RDS and the nightly dump, and says how the RPO could come back down.
+
 ## The developer's own practice (not for Claude Code)
 
 - Sundays: Blind 75, about four problems a week, in the separate `blind75` repo.

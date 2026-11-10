@@ -4,6 +4,7 @@ These tests read the files the README applies with the AWS CLI. They never call 
 """
 
 import json
+import os
 import re
 import ssl
 
@@ -14,10 +15,13 @@ import yaml
 from botocore.validate import ParamValidator
 from sqlalchemy import make_url
 
+import app.models  # noqa: F401  Registers every table on Base.metadata.
 from app.config import PROJECT_ROOT, Settings
+from app.database import Base
 from app.schemas import TEXT_KEY_PATTERN
 from app.storage import UPLOAD_PREFIX
 from ml.registry import S3_PREFIX
+from scripts.upload_backup import BACKUP_PREFIX
 
 # Both of the project's images: the API's and the model service's.
 IMAGE_REPOSITORIES = [
@@ -170,6 +174,13 @@ def test_the_server_can_only_add_uploads_to_the_bucket(server_permissions):
     assert save["Resource"] == f"arn:aws:s3:::{BUCKET}/{UPLOAD_PREFIX}*"
 
 
+def test_the_server_can_add_backups_but_not_read_or_delete_them(server_permissions):
+    save = server_permissions["SaveDatabaseBackups"]
+    assert set(save["Action"]) == {"s3:PutObject", "s3:AbortMultipartUpload"}
+    # The same prefix scripts/upload_backup.py saves under and the lifecycle rule expires.
+    assert save["Resource"] == f"arn:aws:s3:::{BUCKET}/{BACKUP_PREFIX}*"
+
+
 def test_the_model_service_can_only_read_the_saved_models(server_permissions):
     read = server_permissions["ReadTheModels"]
     assert read["Action"] == "s3:GetObject"
@@ -189,6 +200,7 @@ def test_the_worker_can_only_read_the_text_the_lambda_saved(server_permissions):
 def test_the_server_can_pull_both_images_but_never_push(server_permissions):
     assert set(server_permissions) == {
         "SaveUploadedDocs",
+        "SaveDatabaseBackups",
         "ReadDocumentText",
         "ReadTheModels",
         "LogInToEcr",
@@ -238,6 +250,122 @@ def test_first_boot_restarts_docker_after_installing_it():
     script = (AWS / "ec2-user-data.sh").read_text()
     install = script.index("apt-get install -y docker-ce")
     assert script.index("systemctl restart docker.socket docker.service") > install
+
+
+# The database's backups, while it runs on the server (Stage 10).
+
+BACKUP_SCRIPT = AWS / "backup-database.sh"
+
+
+@pytest.fixture(scope="module")
+def backup_script():
+    return BACKUP_SCRIPT.read_text()
+
+
+@pytest.fixture(scope="module")
+def lifecycle():
+    return json.loads((AWS / "docs-bucket-lifecycle.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def lifecycle_rules(lifecycle):
+    return {rule["ID"]: rule for rule in lifecycle["Rules"]}
+
+
+def test_the_lifecycle_rules_are_ones_s3_accepts(lifecycle):
+    s3 = botocore.session.get_session().get_service_model("s3")
+    request = {"Bucket": BUCKET, "LifecycleConfiguration": lifecycle}
+    report = ParamValidator().validate(
+        request, s3.operation_model("PutBucketLifecycleConfiguration").input_shape
+    )
+    assert not report.has_errors(), report.generate_report()
+
+
+def test_backups_are_deleted_after_two_weeks(lifecycle_rules):
+    backups = lifecycle_rules["DeleteBackupsAfter14Days"]
+    assert backups["Status"] == "Enabled"
+    assert backups["Filter"] == {"Prefix": BACKUP_PREFIX}
+    assert backups["Expiration"] == {"Days": 14}
+
+
+def test_only_backups_ever_expire(lifecycle):
+    # A rule without the prefix would delete the help docs, their text, and the models too.
+    for rule in lifecycle["Rules"]:
+        if "Expiration" in rule:
+            assert rule["Filter"] == {"Prefix": BACKUP_PREFIX}, rule["ID"]
+
+
+def test_uploads_that_stopped_halfway_are_cleaned_up_across_the_bucket(lifecycle_rules):
+    # S3 keeps and bills the parts of an unfinished multipart upload until it's aborted.
+    cleanup = lifecycle_rules["CleanUpUnfinishedUploads"]
+    assert cleanup["Status"] == "Enabled"
+    assert cleanup["Filter"] == {}
+    assert cleanup["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
+
+
+def test_the_readme_applies_the_lifecycle_rules_to_the_bucket(readme):
+    # The whole command: anything but a line break, or a backslash that continues the line.
+    [command] = re.findall(r"aws s3api put-bucket-lifecycle-configuration(?:[^\n\\]|\\\n)*", readme)
+    assert f"--bucket {BUCKET}" in command
+    assert "--lifecycle-configuration file://infra/aws/docs-bucket-lifecycle.json" in command
+
+
+def test_the_backup_stops_at_the_first_failing_command(backup_script):
+    # A pg_dump that fails stops the script before the upload.
+    assert backup_script.startswith("#!/bin/bash\n")
+    assert "\nset -euo pipefail\n" in backup_script
+
+
+def test_the_whole_dump_is_written_before_the_upload_starts(backup_script):
+    commands = [line for line in backup_script.splitlines() if not line.startswith("#")]
+    [dump] = [line for line in commands if "pg_dump" in line]
+    [upload] = [line for line in commands if "scripts.upload_backup" in line]
+    assert "--format=custom" in dump.split()
+    assert dump.endswith('> "$FILE"')
+    assert upload.endswith('< "$FILE"')
+    assert commands.index(dump) < commands.index(upload)
+    # The file is deleted however the script ends.
+    assert "trap 'rm -f \"$FILE\"' EXIT" in commands
+
+
+def test_the_backup_uploads_with_a_script_the_api_image_has(backup_script):
+    [module] = re.findall(r"python -m (\S+)", backup_script)
+    path = module.replace(".", "/") + ".py"
+    assert (PROJECT_ROOT / path).exists()
+    assert path in (PROJECT_ROOT / "infra" / "api.Dockerfile").read_text()
+
+
+def test_cron_runs_the_backup_every_night_from_the_servers_clone(backup_script, readme):
+    # The README clones the repo into ubuntu's home folder, and cron runs the script from there.
+    assert os.access(BACKUP_SCRIPT, os.X_OK)
+    cron_line = f"0 8 * * * /home/ubuntu/support-ai/infra/aws/{BACKUP_SCRIPT.name} >> "
+    assert f'echo "{cron_line}/home/ubuntu/backup.log 2>&1"' in readme
+    assert "\ncd /home/ubuntu/support-ai\n" in backup_script
+
+
+def test_every_restore_is_all_or_nothing_and_leaves_out_rds_users(readme):
+    # The whole command, as above.
+    commands = re.findall(r"postgres pg_restore(?:[^\n\\]|\\\n)*", readme)
+    assert len(commands) == 3
+    for command in commands:
+        assert "--no-owner --no-privileges" in command, command
+        assert "--single-transaction" in command, command
+
+
+def test_the_move_dumps_rds_with_the_containers_own_postgres(readme):
+    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
+    # The same pg_dump version as the Postgres it's restored into.
+    assert re.findall(r"(\S+) pg_dump --format=custom", readme) == [
+        compose["services"]["postgres"]["image"]
+    ]
+
+
+def test_the_moves_row_count_check_covers_every_table(readme):
+    [counts] = re.findall(r'COUNTS="([^"]+)"', readme)
+    assert set(re.findall(r"count\(\*\) from (\w+)", counts)) == set(Base.metadata.tables)
+    # And the migration each database is at.
+    assert counts.startswith("select version_num,")
+    assert counts.endswith(" from alembic_version")
 
 
 # The database (RDS).

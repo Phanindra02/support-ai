@@ -1,0 +1,22 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteBackupsAfter14Days",
+      "Filter": {
+        "Prefix": "backups/"
+      },
+      "Status": "Enabled",
+      "Expiration": {
+        "Days": 14
+      }
+    },
+    {
+      "ID": "CleanUpUnfinishedUploads",
+      "Filter": {},
+      "Status": "Enabled",
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

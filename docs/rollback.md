@@ -24,7 +24,13 @@ git diff --name-only <good-commit> <bad-commit> -- alembic/versions
   docker compose run --rm migrate alembic downgrade -1    # one migration back
   ```
 
-  On the EC2 server, the database is RDS, with no Postgres container. Take an RDS snapshot instead, and wait for it before the downgrade. It's free while all backups together stay under 20 GB:
+  On the EC2 server, once Stage 10 has moved the database onto it, run the nightly backup by hand instead. It uploads the dump to S3, off the server, where it's kept 14 days ([restoring one](../infra/aws/README.md#restore-a-backup)):
+
+  ```bash
+  ~/support-ai/infra/aws/backup-database.sh
+  ```
+
+  While the database is still RDS, take an RDS snapshot, and wait for it before the downgrade. It's free while all backups together stay under 20 GB:
 
   ```bash
   aws rds create-db-snapshot --region us-east-2 --db-instance-identifier support-ai \
