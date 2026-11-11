@@ -55,6 +55,7 @@ Every number here was measured, and [docs/results.md](docs/results.md) says how.
 | Customer mood model | Macro F1 **0.743** on 2,856 test messages. At the alert threshold, **99.1%** of flagged messages really are negative. |
 | Bot on 25 test questions | Retrieval found the answer for **24/24** answerable questions, and **25/25** replies were right and named the right doc, including "I don't know" for the one the docs don't answer. The test set is small, so it can't tell chunk sizes apart. |
 | Load test on EKS | **182 requests a second** from 200 simulated agents, **34 ms** median and **130 ms** at the 95th percentile, **1 error in 87,244**. The autoscaler took the API from **2 to 6 pods** within about a minute. |
+| Backup and restore | The nightly `pg_dump` in S3 restored into a scratch database in **0.64 seconds**, with every row count matching. Running Postgres on the server instead of RDS saves about $14 a month. |
 | Tests | **More than 750** pytest tests, run with the linter on every pull request. |
 
 ## Built with

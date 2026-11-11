@@ -12,7 +12,7 @@ Two numbers describe any recovery plan:
 | | RDS (Stages 5 to 9) | The container and a nightly dump (Stage 10) |
 | --- | --- | --- |
 | **RPO** | About 5 minutes. RDS restores to any moment of the last 7 days. | Up to 24 hours, if the server's disk is lost. |
-| **RTO** | Restoring makes a new instance, about as slow as creating one (about 10 minutes), then the URL changes. | A new server from `infra/aws/README.md`, then the newest dump restored. The restore drill measures the restore part. |
+| **RTO** | Restoring makes a new instance, about as slow as creating one (about 10 minutes), then the URL changes. | A new server from `infra/aws/README.md`, then the newest dump restored. The restore drill measures the restore part: 0.64 seconds for today's few megabytes, plus 1.8 to bring the file over (`docs/results.md`). |
 | **Where the copies are** | RDS's backup storage, apart from the instance. | S3, apart from the server, for 14 days. |
 | **Cost** | About $14 a month for the instance. | Well under a cent a month for the dumps. |
 
