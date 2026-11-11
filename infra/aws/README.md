@@ -110,7 +110,7 @@ aws iam get-role --role-name support-ai-ci-push-image --query Role.AssumeRolePol
 
 ## The server (EC2)
 
-One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of memory, running Ubuntu 24.04. It's ARM like the Mac and like CI's runner, so the image CI builds runs on it as is. It runs the same `docker compose` stack as the Mac. Its database is RDS ([below](#the-database-rds)) until Stage 10 moves it back into the stack's Postgres container ([below](#move-the-database-back-onto-the-server)).
+One `t4g.small` instance named `support-ai`: 2 Graviton (ARM) vCPUs and 2 GB of memory, running Ubuntu 24.04. It's ARM like the Mac and like CI's runner, so the image CI builds runs on it as is. It runs the same `docker compose` stack as the Mac. Its database is the stack's own Postgres container ([below](#the-database-on-the-server)). From Stage 5 to Stage 10 it was RDS.
 
 - **IAM role `support-ai-server`** gives the server's programs AWS credentials, through the instance metadata service, so no AWS keys are stored on it. `ec2-permissions.json` allows only what the app does: save uploads under `uploads/` in the docs bucket, read the text the Lambda saved under `text/` (for the worker), save database backups under `backups/`, pull the API image from ECR, and read the database's URL from Parameter Store. A role reaches an instance through an instance profile of the same name.
 - **IMDSv2 only, with a hop limit of 2.** IMDSv2 needs a token from a PUT request first, which blocks the classic attack where a server is tricked into fetching the metadata URL and leaking its credentials. The hop limit of 2 lets a container reach the metadata service: compose's network adds one hop, and at the default of 1 the API couldn't get the role's credentials.
@@ -220,7 +220,7 @@ echo "MODEL_IMAGE=${REGISTRY}/support-ai-model:latest" >> .env
 
 When it first starts, it downloads the models its settings name from `models/` in the bucket, which the instance role may read (`ReadTheModels`), into the `model-cache` volume. It uses about 270 MB of memory, and the `t4g.small` had about 800 MB available before it started.
 
-`--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty, so the WhatsApp webhook answers 503 and alerts are skipped until they're set. Once the database and the secrets below are set up, the app loads every secret from Parameter Store instead, and the server's `.env` holds none of them. From Stage 10 it holds one again, the password of the server's own Postgres ([below](#move-the-database-back-onto-the-server)).
+`--no-build` makes compose use the pulled image instead of building one on the server. `TWILIO_AUTH_TOKEN` and `N8N_WEBHOOK_SECRET` stay empty, so the WhatsApp webhook answers 503 and alerts are skipped until they're set. Once the secrets below are set up, the app loads them from Parameter Store instead, and the server's `.env` holds only one secret, `POSTGRES_PASSWORD`, the password of the server's own Postgres ([below](#the-database-on-the-server)).
 
 The API is public through Caddy, at https://support.mysolospark.com ([below](#https-the-domain-and-caddy)), but n8n's editor never is. Reach it through an SSH tunnel. Then http://localhost:5679 on the Mac is the server's n8n, and http://localhost:8001/docs its API, straight from the server without Caddy:
 
@@ -236,7 +236,7 @@ cd ~/support-ai && git pull && docker compose pull && docker compose up -d --no-
 
 ### Move it to RDS
 
-Stage 5's move, kept as a record. Stage 10 reverses it ([below](#move-the-database-back-onto-the-server)).
+Stage 5's move, kept as a record. Stage 10 moved the database back onto the server ([below](#the-database-on-the-server)), and RDS no longer exists.
 
 Once the database and the secrets below exist, the server uses RDS instead of its Postgres container. `compose.ec2.yml` holds the server's changes to `docker-compose.yml`. The API and the migrations load `DATABASE_URL` and the other secrets from Parameter Store, and the Postgres container no longer starts. One line in the server's `.env`, `COMPOSE_FILE`, makes every `docker compose` command there read both files.
 
@@ -276,105 +276,19 @@ To check that the API's connection to RDS is encrypted. It printed `(True, 'TLSv
 docker compose exec -T api python -c "from sqlalchemy import text; from app.database import engine; print(engine.connect().execute(text('select ssl, version from pg_stat_ssl where pid = pg_backend_pid()')).one())" </dev/null
 ```
 
-### Move the database back onto the server
+### The database on the server
 
-RDS costs about $14 a month, the biggest line on the bill, for a database of a few megabytes. Stage 10 moves it back into the Postgres container on the server, which costs nothing more. Three things RDS did by itself become the server's job:
+The database is the Postgres container from `docker-compose.yml`, with its data in the `server-postgres-data` volume (`compose.ec2.yml`). The app connects with the URL `docker-compose.yml` builds from `POSTGRES_PASSWORD` in the server's `.env`. Its port isn't published, so only the other containers can reach it.
+
+From Stage 5 to Stage 10 the database was RDS ([below](#the-database-rds)). RDS cost about $14 a month, the biggest line on the bill, for a database of a few megabytes, so Stage 10 moved it back here, where it costs nothing more. Three things RDS did by itself are now the server's job:
 
 - **Backups.** RDS could restore to any moment of the last 7 days, up to about 5 minutes ago. Now a cron job dumps the database to S3 every night, and S3 keeps each dump 14 days ([below](#back-up-the-database)). Losing the server's disk would lose up to a day of changes.
 - **Updates.** RDS installed Postgres 16's minor fixes by itself. The container runs whatever its image holds, until a newer one is pulled.
 - **Room.** The database shares the server's 2 GB of memory and 20 GB of disk with the rest of the stack.
 
-`compose.ec2.yml` starts the container on the server again, with its data in a new volume, `server-postgres-data`. Merging that changes nothing for the app. The server's `.env` has an empty `DATABASE_URL=` line, so the app still loads RDS's URL from Parameter Store, and the container sits empty. The move copies RDS into the container, then fills that line in with the container's URL. An environment variable wins over Parameter Store, so the app switches, and emptying the line switches it back.
+So the server's `.env` holds one secret: `POSTGRES_PASSWORD`. It opens only a database whose port isn't published, and whose data is on the same disk as `.env`, so anyone who could read the file could read the data anyway. Keeping the password in Parameter Store instead would add a step before every `docker compose` command, which needs it just to read `docker-compose.yml`.
 
-So the server's `.env` holds a secret again: the database's password, in `POSTGRES_PASSWORD` and in that URL. It opens only a database whose port isn't published, and whose data is on the same disk as `.env`, so anyone who could read the file could read the data anyway. Keeping the password in Parameter Store instead would add a step before every `docker compose` command, which needs it just to read `docker-compose.yml`.
-
-First, on the Mac: let the server save backups (`SaveDatabaseBackups` in `ec2-permissions.json`), and have S3 delete them after 14 days. `put-bucket-lifecycle-configuration` replaces every rule the bucket has, so check first that it has none.
-
-```bash
-# On the Mac, from the project root.
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
-  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
-# Says NoSuchLifecycleConfiguration while the bucket has no rules.
-aws s3api get-bucket-lifecycle-configuration --bucket support-ai-docs-phanindra02
-aws s3api put-bucket-lifecycle-configuration --bucket support-ai-docs-phanindra02 \
-  --lifecycle-configuration file://infra/aws/docs-bucket-lifecycle.json
-```
-
-Then on the server, once CI has deployed this commit and the postgres container is running. The API and the worker are stopped during the copy, so nothing changes while it runs, and WhatsApp messages that arrive meanwhile get no answer.
-
-```bash
-# On the server:
-cd ~/support-ai && docker compose ps postgres
-
-# RDS's URL, from the app's own settings, as in the move to RDS. Kept in a variable, never shown.
-RDS_URL=$(docker compose run --rm --no-deps -T api python -c "from app.config import settings; print(settings.database_url)" </dev/null)
-docker compose stop api worker
-
-# All of RDS: the tables, the rows, and the migration it's at, in pg_dump's custom format, as
-# the nightly backups use. mktemp makes a file only ubuntu can read. pg_dump checks RDS's
-# certificate with the same bundle the app uses.
-DUMP=$(mktemp)
-docker run --rm -v "$PWD/infra/aws/rds-ca-us-east-2.pem:/rds.pem:ro" -e PGSSLROOTCERT=/rds.pem \
-  pgvector/pgvector:0.8.2-pg16 pg_dump --format=custom "${RDS_URL/+psycopg/}" > "$DUMP"
-# --no-owner and --no-privileges leave out RDS's own users, which the container doesn't have.
-# --single-transaction restores all of it or, if anything fails, none of it.
-docker compose exec -T postgres pg_restore -U support -d support --no-owner --no-privileges \
-  --single-transaction < "$DUMP"
-
-# The same row counts on both sides, and the same migration.
-COUNTS="select version_num, (select count(*) from customers) customers, (select count(*) from agents) agents, (select count(*) from tickets) tickets, (select count(*) from messages) messages, (select count(*) from documents) documents, (select count(*) from chunks) chunks, (select count(*) from predictions) predictions from alembic_version"
-docker run --rm -v "$PWD/infra/aws/rds-ca-us-east-2.pem:/rds.pem:ro" -e PGSSLROOTCERT=/rds.pem \
-  pgvector/pgvector:0.8.2-pg16 psql "${RDS_URL/+psycopg/}" -c "$COUNTS"
-docker compose exec -T postgres psql -U support -d support -c "$COUNTS" </dev/null
-unset RDS_URL
-```
-
-If the two rows differ, stop here: `docker compose start api worker` puts everything back as it was, on RDS. If they match, switch:
-
-```bash
-# The container's URL, the same one docker-compose.yml builds, with the password copied from
-# the POSTGRES_PASSWORD line. It's hex, so it's safe in a URL, and it's never shown.
-PASSWORD=$(sed -n 's/^POSTGRES_PASSWORD=//p' .env)
-sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+psycopg://support:${PASSWORD}@postgres:5432/support|" .env
-unset PASSWORD
-docker compose up -d --no-build
-
-# Prints postgres:5432/support, the part of the app's URL after the password.
-docker compose exec -T api python -c "from app.config import settings; print(settings.database_url.rsplit('@', 1)[1])" </dev/null
-# Logging in with a made-up email looks it up in the database, so 401 means the database
-# answered. A 502 means the API is still starting: try again.
-curl -s -o /dev/null -w '%{http_code}\n' https://support.mysolospark.com/auth/token \
-  -d 'username=nobody@example.com&password=wrong'
-
-# The first backup is RDS's last copy, which also checks that the server may save backups.
-docker compose run --rm --no-deps -T api python -m scripts.upload_backup < "$DUMP"
-rm "$DUMP"
-```
-
-Then set up the nightly backup ([below](#back-up-the-database)).
-
-The way back, while RDS still exists. RDS hasn't changed since the move, so anything written after it is only in the container, and would need copying back the same way:
-
-```bash
-sed -i 's|^DATABASE_URL=.*|DATABASE_URL=|' .env && docker compose up -d --no-build
-```
-
-The `postgres-data` volume from before the move to RDS may still be on the server, with the data as it was then. Nothing uses it, and `docker volume rm support-ai_postgres-data` deletes it.
-
-Once the app has run on the container for a week, with a backup every night, delete RDS. It bills by the hour until then, about $3 for the week. `aws rds stop-db-instance` would cut that to its storage, about 50 cents, but the way back would then wait a few minutes for `start-db-instance`. No final snapshot: the move's dump is the first backup in S3, and each night's since holds everything it did and more.
-
-```bash
-# On the Mac. Deletion protection is there so that deleting takes two deliberate steps.
-aws rds modify-db-instance --region us-east-2 --db-instance-identifier support-ai \
-  --no-deletion-protection --apply-immediately
-aws rds delete-db-instance --region us-east-2 --db-instance-identifier support-ai \
-  --skip-final-snapshot --delete-automated-backups
-aws rds wait db-instance-deleted --region us-east-2 --db-instance-identifier support-ai
-# Free, but nothing uses them anymore.
-aws rds delete-db-subnet-group --region us-east-2 --db-subnet-group-name support-ai
-aws ec2 delete-security-group --region us-east-2 --group-name support-ai-db
-```
+**How the move went.** The plan was to copy RDS into the container, check the row counts on both sides, and then switch the app over with the `DATABASE_URL` line in the server's `.env`, while RDS stayed for a week as the way back. Those commands are in this file as it was at commit `fec4ced` (`git show fec4ced:infra/aws/README.md`). They were tried on two local Postgres 16 clusters standing in for RDS and the container. But the project's AWS resources had all been deleted on 2026-10-26, once the roadmap was done, and when the account was rebuilt on 2026-11-10, RDS wasn't created again. So the container was filled from a dump of the Mac's seed data instead, the same way as restoring over the real database ([below](#restore-a-backup)), and the row counts matched (`docs/results.md`).
 
 ### Back up the database
 
@@ -388,6 +302,21 @@ The upload starts only after `pg_dump` has finished, so one that fails halfway n
 - **Who can touch them.** The server's role may add backups (`SaveDatabaseBackups`), but not read, list, or delete them. Reading one means downloading it on the Mac, as an admin.
 - **How long they're kept.** `docs-bucket-lifecycle.json` deletes backups 14 days after they're made. A second rule cleans up multipart uploads that stopped halfway, anywhere in the bucket, after a day: S3 keeps and bills their parts, out of sight, until they're aborted.
 - **Cost:** fourteen dumps of a few megabytes, well under a cent a month.
+
+Once per account, before the first backup: let the server save backups (`SaveDatabaseBackups` in `ec2-permissions.json`), and have S3 delete them after 14 days. `put-bucket-lifecycle-configuration` replaces every rule the bucket has, so check first that it has none.
+
+```bash
+# On the Mac, from the project root.
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws iam put-role-policy --role-name support-ai-server --policy-name app-access \
+  --policy-document "$(sed "s/ACCOUNT_ID/$ACCOUNT_ID/" infra/aws/ec2-permissions.json)"
+# Says NoSuchLifecycleConfiguration while the bucket has no rules.
+aws s3api get-bucket-lifecycle-configuration --bucket support-ai-docs-phanindra02
+aws s3api put-bucket-lifecycle-configuration --bucket support-ai-docs-phanindra02 \
+  --lifecycle-configuration file://infra/aws/docs-bucket-lifecycle.json
+```
+
+Then on the server:
 
 ```bash
 # On the server. Adds the line to ubuntu's crontab, keeping any lines already there.
@@ -418,16 +347,25 @@ scp -i ~/.ssh/support-ai-ec2 /tmp/support.dump ubuntu@"$SERVER_IP":support.dump
 rm /tmp/support.dump
 ```
 
+Then restore it into a scratch database, timed, and compare its row counts and migration with the real database's. The real one can have more rows, written since the backup, but never fewer. `--no-owner` and `--no-privileges` leave out who owned what, and `--single-transaction` restores all of it or, if anything fails, none of it.
+
 ```bash
-# On the server: restore it into a scratch database, count the tickets, and drop it.
+# On the server.
 cd ~/support-ai
-docker compose exec -T postgres createdb -U support restore_check </dev/null
-docker compose exec -T postgres pg_restore -U support -d restore_check --no-owner --no-privileges \
-  --single-transaction < ~/support.dump
-docker compose exec -T postgres psql -U support -d restore_check -c "select count(*) from tickets" </dev/null
+time {
+  docker compose exec -T postgres createdb -U support restore_check </dev/null
+  docker compose exec -T postgres pg_restore -U support -d restore_check --no-owner --no-privileges \
+    --single-transaction < ~/support.dump
+}
+COUNTS="select version_num, (select count(*) from customers) customers, (select count(*) from agents) agents, (select count(*) from tickets) tickets, (select count(*) from messages) messages, (select count(*) from documents) documents, (select count(*) from chunks) chunks, (select count(*) from predictions) predictions from alembic_version"
+for db in support restore_check; do
+  docker compose exec -T postgres psql -U support -d "$db" -c "$COUNTS" </dev/null
+done
 docker compose exec -T postgres dropdb -U support restore_check </dev/null
 rm ~/support.dump
 ```
+
+The first drill, on 2026-11-11, took 1.8 seconds to bring the backup to the server and 0.6 seconds to restore it, and every count matched (`docs/results.md`).
 
 To restore over the real database, after a mistake only a backup can undo. Everything written since that backup is lost, so take a backup by hand first:
 
@@ -445,7 +383,7 @@ rm ~/support.dump
 
 ## The database (RDS)
 
-Stage 10 moves the database back onto the server ([above](#move-the-database-back-onto-the-server)), and this instance is deleted a week after the move. Until then, it's set up as described here.
+A record of Stage 5 to Stage 10. RDS was deleted with the rest of the project's AWS resources on 2026-10-26, and wasn't created again when the account was rebuilt for Stage 10, which moved the database onto the server ([above](#the-database-on-the-server)). This section, `rds-instance.json`, and the certificate bundle are kept to show how it was set up.
 
 One RDS PostgreSQL instance named `support-ai`, which replaces the Postgres container on the server. AWS runs Postgres for us: it installs minor-version fixes, backs the database up every night, and can restore it to any moment of the last 7 days, up to about 5 minutes ago. `rds-instance.json` holds every setting:
 
@@ -542,14 +480,15 @@ On EC2, every secret the app needs is a SecureString parameter under `/support-a
 
 | Parameter | What it is | Set by |
 | --- | --- | --- |
-| `/support-ai/DATABASE_URL` | The RDS URL, with its password | The commands that created the database |
 | `/support-ai/JWT_SECRET_KEY` | Signs agents' login tokens | A random value, made below |
 | `/support-ai/TWILIO_AUTH_TOKEN` | Checks that WhatsApp webhooks came from Twilio | The developer, copied from the Mac's `.env` |
 | `/support-ai/N8N_WEBHOOK_SECRET` | Proves alerts to n8n came from the API | The developer, once the server's n8n has the workflow |
 | `/support-ai/LAMBDA_WEBHOOK_SECRET` | Proves the Lambda sent "this document is processed" | A random value, made with the Lambda ([below](#pulling-the-text-out-of-uploads-lambda)) |
 | `/support-ai/OPENAI_API_KEY` | Pays for embeddings and the bot's answers | The developer, copied from the Mac's `.env` |
 
-**How the app loads them.** `compose.ec2.yml` sets `PARAMETER_STORE_PATH=/support-ai` for the API and the migrations. When the app starts, `app/config.py` makes one `GetParametersByPath` request (more if there are over 10), with decryption, and the part of each name after the last `/` names the setting it fills. The first place that sets a value wins: a real environment variable, then `.env`, then Parameter Store, then the default in `app/config.py`. So the server's `.env` must leave these out, or empty (`NAME=` counts as not set). On the Mac and in CI, `PARAMETER_STORE_PATH` is empty, and the app never asks AWS.
+Until Stage 10, `/support-ai/DATABASE_URL` held RDS's URL too. RDS went, and so did the parameter. The app's database URL is now `docker-compose.yml`'s, for the server's own Postgres ([above](#the-database-on-the-server)).
+
+**How the app loads them.** `compose.ec2.yml` sets `PARAMETER_STORE_PATH=/support-ai` for the API, the migrations, and the worker. When the app starts, `app/config.py` makes one `GetParametersByPath` request (more if there are over 10), with decryption, and the part of each name after the last `/` names the setting it fills. The first place that sets a value wins: a real environment variable, then `.env`, then Parameter Store, then the default in `app/config.py`. So the server's `.env` must leave these out, or empty (`NAME=` counts as not set). On the Mac and in CI, `PARAMETER_STORE_PATH` is empty, and the app never asks AWS.
 
 The app reads them only when it starts. If AWS can't be reached, the API stops within about a minute with an error, rather than running without its secrets, and Docker starts it again (`restart: unless-stopped`).
 
@@ -574,7 +513,7 @@ aws ssm put-parameter --region us-east-2 --name /support-ai/TWILIO_AUTH_TOKEN --
   --value "$(grep '^TWILIO_AUTH_TOKEN=' .env | cut -d= -f2-)"
 ```
 
-`DATABASE_URL` is already there, from the database's commands. `N8N_WEBHOOK_SECRET` waits until the server's n8n has the workflow, with its own Header Auth value:
+`N8N_WEBHOOK_SECRET` waits until the server's n8n has the workflow, with its own Header Auth value:
 
 ```bash
 aws ssm put-parameter --region us-east-2 --name /support-ai/N8N_WEBHOOK_SECRET --type SecureString \
@@ -591,11 +530,11 @@ aws ssm put-parameter --region us-east-2 --name /support-ai/OPENAI_API_KEY --typ
   --value "$(grep '^OPENAI_API_KEY=' .env | cut -d= -f2-)"
 ```
 
-Then, on the server, empty the secrets in `.env`, so Parameter Store's values are used, and restart. `POSTGRES_PASSWORD` stays, because `docker-compose.yml` won't load without it. From Stage 10, it's the password of the server's own Postgres again.
+Then, on the server, empty the secrets in `.env`, so Parameter Store's values are used, and restart. `POSTGRES_PASSWORD` stays: it's the password of the server's own Postgres, and `docker-compose.yml` won't load without it.
 
 ```bash
 cd ~/support-ai && git pull && docker compose pull
-sed -i -E 's/^(DATABASE_URL|JWT_SECRET_KEY|TWILIO_AUTH_TOKEN|N8N_WEBHOOK_SECRET)=.*/\1=/' .env
+sed -i -E 's/^(JWT_SECRET_KEY|TWILIO_AUTH_TOKEN|N8N_WEBHOOK_SECRET)=.*/\1=/' .env
 docker compose up -d --no-build
 ```
 
@@ -620,9 +559,10 @@ aws ssm describe-parameters --region us-east-2 \
   --parameter-filters Key=Name,Option=BeginsWith,Values=/support-ai/ \
   --query 'Parameters[].[Name,Type,Version]' --output table
 
-# On the server: the container has no secret in its environment, and the app still has them.
-docker compose exec -T api sh -c 'env | grep -cE "^(DATABASE_URL|JWT_SECRET_KEY)=."' </dev/null
-docker compose exec -T api python -c "from app.config import settings; print(settings.database_url.split('@')[1])" </dev/null
+# On the server: none of Parameter Store's secrets is in the container's environment (0), and
+# the app still has them (64, the signing key's length).
+docker compose exec -T api sh -c 'env | grep -cE "^(JWT_SECRET_KEY|OPENAI_API_KEY)=."' </dev/null
+docker compose exec -T api python -c "from app.config import settings; print(len(settings.jwt_secret_key))" </dev/null
 ```
 
 ## HTTPS (the domain and Caddy)

@@ -26,10 +26,11 @@ flowchart LR
         worker -->|"/predict"| model["Model service"]
         worker --> n8n["n8n"]
         api --> n8n
+        api --> postgres[("Postgres with pgvector")]
+        worker --> postgres
     end
 
-    api --> rds[("RDS Postgres with pgvector")]
-    worker --> rds
+    postgres -->|"nightly backup"| s3
     api -->|"embed and answer"| openai["OpenAI"]
     worker -->|"embed chunks"| openai
     api -->|"upload PDF"| s3[("S3")]
@@ -41,7 +42,7 @@ flowchart LR
     n8n --> slack(["Slack channel"])
 ```
 
-The API answers within Twilio's 15-second limit, so anything slow (embedding a doc, triaging a ticket, alerting Slack) runs as a job on the worker. Only Postgres is essential: if OpenAI, Redis, the model service, or n8n is down, customers still get a reply and tickets are still saved. Secrets live in AWS Parameter Store, and AWS access comes from IAM roles, so no keys sit in the code, on the server, or in GitHub.
+The API answers within Twilio's 15-second limit, so anything slow (embedding a doc, triaging a ticket, alerting Slack) runs as a job on the worker. Only Postgres is essential: if OpenAI, Redis, the model service, or n8n is down, customers still get a reply and tickets are still saved. Secrets live in AWS Parameter Store, and AWS access comes from IAM roles, so no keys sit in the code or in GitHub, and the server's disk holds only its own database's password. The database is a Postgres container on the server, backed up to S3 every night.
 
 ## Results
 

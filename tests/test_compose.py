@@ -16,16 +16,12 @@ from app.config import PROJECT_ROOT, Settings
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 EC2_COMPOSE_FILE = PROJECT_ROOT / "infra" / "aws" / "compose.ec2.yml"
 
-# What compose's !reset tag reads as here. Plain YAML doesn't know the tag.
-RESET = "!reset"
-
 
 class ComposeLoader(yaml.SafeLoader):
-    """safe_load, plus compose's tags: !reset drops a value from an earlier file, and !override
-    replaces it. Here !override reads as the list it sets, the only kind this project uses."""
+    """safe_load, plus compose's !override tag, which replaces a value from an earlier file.
+    Here it reads as the list it sets, the only kind this project uses."""
 
 
-ComposeLoader.add_constructor(RESET, lambda loader, node: RESET)
 ComposeLoader.add_constructor("!override", lambda loader, node: loader.construct_sequence(node))
 
 
@@ -157,10 +153,9 @@ def test_on_ec2_the_app_loads_its_secrets_from_parameter_store(ec2_services):
     for name in ["api", "migrate", "worker"]:
         environment = ec2_services[name]["environment"]
         assert environment["PARAMETER_STORE_PATH"] == "/support-ai"
-        # An environment variable would win over Parameter Store, so the container's URL from
-        # docker-compose.yml is dropped, not replaced. The DATABASE_URL line in the server's .env
-        # decides instead: empty for RDS's URL in Parameter Store, or the container's after the move.
-        assert environment["DATABASE_URL"] == RESET
+        # The database's URL stays docker-compose.yml's, for the postgres container (checked
+        # above). An environment variable wins over Parameter Store, so nothing there replaces it.
+        assert "DATABASE_URL" not in environment
 
 
 def test_the_api_and_the_worker_ask_the_model_container_for_predictions(api_environment):
@@ -195,8 +190,8 @@ def test_on_ec2_the_api_and_the_worker_still_ask_the_model_container(ec2_service
 def test_on_ec2_postgres_runs_on_a_volume_of_its_own(ec2_compose, ec2_services, services):
     postgres = ec2_services["postgres"]
     assert "profiles" not in postgres
-    # Not docker-compose.yml's postgres-data, which on the server may still hold the data from
-    # before the move to RDS, and Postgres would start on it.
+    # Not docker-compose.yml's postgres-data, which on a server older than Stage 5's move to RDS
+    # may still hold the data from then, and Postgres would start on it.
     assert postgres["volumes"] == ["server-postgres-data:/var/lib/postgresql/data"]
     assert "server-postgres-data" in ec2_compose["volumes"]
     assert "postgres-data:/var/lib/postgresql/data" in services["postgres"]["volumes"]
@@ -207,19 +202,6 @@ def test_on_ec2_the_migrations_wait_for_postgres(ec2_services, services):
     # which they run against once the app has moved onto it.
     assert "depends_on" not in ec2_services["migrate"]
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
-
-
-def test_the_move_points_the_app_at_the_url_compose_gives_the_containers(api_environment):
-    readme = (PROJECT_ROOT / "infra" / "aws" / "README.md").read_text()
-    # Each sed in the AWS README that rewrites the DATABASE_URL line in the server's .env.
-    switch, way_back = re.findall(r"s\|\^DATABASE_URL=\.\*\|DATABASE_URL=([^|]*)\|", readme)
-    # Emptying the line hands the setting back to Parameter Store, which has RDS's URL.
-    assert way_back == ""
-    url, container = make_url(switch), make_url(api_environment["DATABASE_URL"])
-    assert url.set(password="") == container.set(password="")
-    # The password is the POSTGRES_PASSWORD that docker-compose.yml's URL uses.
-    assert url.password == "${PASSWORD}"
-    assert "PASSWORD=$(sed -n 's/^POSTGRES_PASSWORD=//p' .env)" in readme
 
 
 def test_the_servers_env_turns_the_ec2_file_on():
