@@ -1,6 +1,6 @@
 # Stage 10: Postgres on the server instead of RDS
 
-**Status:** the app runs on the server's Postgres container, a backup goes to S3 every night, and the newest one has been restored and checked. RDS itself was already gone. Its subnet group and security group were left over, and deleting them is the last **[You]** step.
+**Status:** the app runs on the server's Postgres container, a backup goes to S3 every night, and the newest one has been restored and checked. RDS is gone, along with its subnet group and security group, which the first teardown had missed.
 
 ## What was built
 
