@@ -376,3 +376,32 @@ Measured on 2026-10-25 against `https://support.mysolospark.com` on the EKS clus
 - **Latency, all requests:** median 34 ms, 95th percentile 130 ms, 99th 420 ms, slowest 1.7 s. `/tickets`, which reads Postgres every time, was 36 / 140 / 400 ms. `/stats`, mostly from the Redis cache, 33 / 130 / 380 ms. Logging in was 890 ms at the median, because hashing a password is slow on purpose.
 - **Errors:** 1 of 87,244, a 502 on `/stats` 9 seconds into the scale-up, while the load balancer was adding the new pods.
 - **Autoscaling:** the API started at its minimum of 2 pods. 30 seconds after the load began, their CPU was at 212% of the 250m request, and the HPA asked for 4 pods. 30 seconds later it was at 309% and the HPA went to 6, its maximum. All 6 were ready within about a minute of the load starting. For the remaining 7 minutes, CPU held at 74% to 78% of the request, just over the 70% target, so 6 pods were about right for 182 requests a second. More load would need a higher `maxReplicas`, and past about 8 API pods, a third node.
+
+## Postgres on the server (Stage 10)
+
+Measured on 2026-11-10 and 2026-11-11 on the rebuilt `t4g.small` server (2 GB of memory and 2 GB of swap), running CI's images from the merge of PR #50. Memory was read with `free -m` and `docker stats --no-stream`, in MiB.
+
+**The move.** RDS no longer existed: the project's AWS resources were deleted on 2026-10-26, and the account was rebuilt on 2026-11-10 without it. So the container was filled from a custom-format `pg_dump` of the Mac's seed data (114,704 bytes), with `pg_restore --single-transaction`, while the API and the worker were stopped. The row counts were the same on the Mac and on the server: migration `5e2b7c9d41a6`, 487 customers, 12 agents, 1,000 tickets, 2,355 messages, and no documents, chunks, or predictions. The database takes 9,135 kB, and the server's disk is 49% used (8.9 of 19 GB).
+
+**Memory.**
+
+| When | Used | Available | Swap used |
+|---|---:|---:|---:|
+| The new server, no containers yet (2026-11-10) | 424 | 1,410 | 0 |
+| The whole stack, with Postgres empty (2026-11-11, about 00:15 UTC) | 1,178 | 656 | 214 |
+| The whole stack, with the data loaded and after the first backup (about 06:46 UTC) | 1,104 | 730 | 348 |
+
+- Per container, at the last reading: n8n 302, the API 179, the worker 79, Postgres 60, the model service 40, Caddy 20, and Redis 12. Postgres was 30 when empty.
+- These numbers fall as the kernel moves idle memory into swap, so they're rough. The model service read 110 at the first reading and 40 at the last.
+- Before Stage 10, with RDS and no Postgres container, the server had 736 MB available (Stage 7, above). So the container costs little memory at this size, though a busier database would want more.
+- Postgres allows 100 connections (`SHOW max_connections;`, the default).
+
+**The first backup.** `infra/aws/backup-database.sh`, run by hand at 06:44 UTC, saved `backups/support-20261111T064434Z.dump` (114,432 bytes). The lifecycle rules that delete backups after 14 days were in place.
+
+**The restore drill.** On 2026-11-11, following "Restore a backup" in `infra/aws/README.md`, with that backup:
+
+- Downloading it from S3 to the Mac and copying it to the server took 1.83 seconds, timed on the Mac (the developer's own run: 1.86 seconds). The file was 114,432 bytes on both ends.
+- `createdb` and `pg_restore` into a scratch database, `restore_check`, took 0.64 seconds, timed with bash's `time` on the server.
+- The scratch database's migration and row counts matched the real database's exactly: `5e2b7c9d41a6`, 487, 12, 1,000, 2,355, 0, 0, 0.
+
+So, at this size, restoring the newest backup takes under 3 seconds once a server is running. After losing the server, the recovery time is mostly the time to build a new one from the README.

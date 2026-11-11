@@ -33,7 +33,7 @@ def test_readme_has_the_architecture_diagram_and_links_the_design_doc():
 
 @pytest.mark.parametrize(
     "number",
-    ["11.07 ms", "0.02 ms", "0.7 to 1.0 ms", "0.709", "0.594", "0.743", "99.1%", "24/24", "25/25", "87,244", "182"],
+    ["11.07 ms", "0.02 ms", "0.7 to 1.0 ms", "0.709", "0.594", "0.743", "99.1%", "24/24", "25/25", "87,244", "182", "0.64 seconds"],
 )
 def test_headline_numbers_come_from_the_results(number):
     # A number in the README must be one that was measured, so a rerun that changes it

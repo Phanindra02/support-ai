@@ -68,10 +68,11 @@ flowchart LR
         worker -->|"/predict"| model["Model service"]
         worker --> n8n["n8n"]
         api --> n8n
+        api --> postgres[("Postgres with pgvector")]
+        worker --> postgres
     end
 
-    api --> rds[("RDS Postgres with pgvector")]
-    worker --> rds
+    postgres -->|"nightly backup"| s3
     api -->|"embed and answer"| openai["OpenAI"]
     worker -->|"embed chunks"| openai
     api -->|"upload PDF"| s3[("S3")]
@@ -93,7 +94,7 @@ The API and worker read their secrets from Parameter Store when they start. Ever
 | **Worker** (`worker/`) | Background jobs from the Redis queue: embedding docs, triaging tickets | Jobs that call slow services or take seconds shouldn't hold a request open |
 | **Model service** (`ml/service.py`) | Serves the priority and sentiment models over HTTP | The models need SciPy and scikit-learn (335 MB *measured*), which the API doesn't. They can be updated and scaled on their own. |
 | **Redis** | Cache, rate limit counts, and the job queue | Fast, shared by every API copy, and nothing in it can't be rebuilt |
-| **Postgres on RDS** | Customers, tickets, messages, agents, docs, chunks with their embeddings, predictions | The only part whose data matters. RDS handles its backups. |
+| **Postgres** (a container on the server) | Customers, tickets, messages, agents, docs, chunks with their embeddings, predictions | The only part whose data matters. A cron job dumps it to S3 every night, and S3 keeps each dump 14 days. |
 | **Lambda** (`lambda/`) | Pulls the text out of each uploaded PDF | Runs only when a PDF arrives, so it costs nothing in between, and a bad PDF can't crash the API |
 | **n8n** | Turns an alert into a Slack message | The team can change the message or channel without a deploy |
 | **Caddy** | HTTPS with a free Let's Encrypt certificate | Simpler than a load balancer for one server |
@@ -153,7 +154,7 @@ Why it's shaped this way:
 In order, with the next step for each:
 
 1. **The webhook waits on OpenAI.** FastAPI runs each WhatsApp request on one of 40 threads per process, and a bot answer holds a thread through two OpenAI calls. If OpenAI slows to its 6-second cap per call, one process handles about 40 ÷ 12 ≈ 3 messages a second before Twilio's requests start to queue. *Next step:* reply to Twilio at once with an empty response, queue the question, and have the worker send the answer through Twilio's messaging API. Then the webhook takes milliseconds, whatever OpenAI does.
-2. **Database connections.** Each API process keeps up to 15 connections (SQLAlchemy's default pool of 5, plus 10 overflow), and so does the worker. RDS sets the limit from memory, which on a 1 GB `db.t4g.micro` is somewhere near 100 (`SHOW max_connections;` gives the exact number). At 6 API pods, the most the autoscaler allows, the pools could ask for about 105. *Next step:* a smaller pool per pod, or a connection pooler like RDS Proxy or PgBouncer, then a bigger instance.
+2. **Database connections.** Each API process keeps up to 15 connections (SQLAlchemy's default pool of 5, plus 10 overflow), and so does the worker. The Postgres container allows 100 (*measured* with `SHOW max_connections;`, the default). At 6 API pods, the most the autoscaler allows, the pools could ask for about 105. *Next step:* a smaller pool per pod, or a connection pooler like PgBouncer, then more memory for Postgres.
 3. **Deep pages.** The ticket list uses `OFFSET`, which reads and discards every skipped row: skipping 50,000 took 7.59 ms, against 0.02 ms for the first page (*measured*). *Next step:* cursor pagination on `(created_at, id)`, which the index already supports.
 4. **Vector search with no index.** Each question scans every chunk. That's fine for thousands. Past roughly 100,000 chunks, an HNSW index on `embedding` keeps searches fast, at the cost of slightly approximate results and slower inserts.
 5. **One worker process.** RQ runs one job at a time per worker, and a triage takes 0.66 to 1.6 seconds (*measured*), so one worker triages over 2,000 tickets an hour. The target needs about 1,000 a day. *Next step:* more worker processes. Jobs are already safe to run in parallel and twice.
@@ -169,7 +170,7 @@ In order, with the next step for each:
 | n8n | The alert is logged and lost. The ticket and its priority are saved. | An alert never blocks saving. Retrying alerts is a gap. |
 | Twilio delivers twice | The second copy finds the first by its Twilio id and gets the same reply | The unique `twilio_sid`, checked after the customer's row lock |
 | The EC2 server | Everything except S3 and the Lambda is down until it's back | One server is a single point of failure, accepted for cost |
-| RDS | Requests that touch the database fail until it's back | One zone. Multi-AZ would roughly double its cost. |
+| The server's disk | Everything written since the last nightly backup is lost: up to a day | A new server from `infra/aws/README.md`, then the newest dump restored. Restoring took 0.6 seconds (*measured*). RDS could restore to 5 minutes ago, for about $14 a month. |
 
 ## Trade-offs
 
@@ -184,8 +185,8 @@ In order, with the next step for each:
 | Logistic Regression | XGBoost, or an LLM | Best macro F1 on priority (0.709 against 0.615, *measured*), 100 times faster to train, 1.1 to 2.4 MB on disk, and free to run | A model beats it on held-out tickets from this platform's own data |
 | Alert at a 0.8 negative score | The model's usual 0.5 | 99% of flagged messages are really negative (*measured*). At 0.5, over half of all messages would alert, and the team would learn to ignore the channel. | The team says it's missing angry customers |
 | Sliding-window log rate limit | A fixed per-minute counter | Can't be beaten by bursting either side of the minute | Memory per IP matters: it stores one entry per request |
-| One EC2 server with docker compose | EKS, or ECS | About $31 a month against about $146 for the cluster. The load is far below what one server handles. | The load needs more than one server, or downtime during deploys matters |
-| RDS | Postgres in a container | Backups, patching, and restores without running them | |
+| One EC2 server with docker compose | EKS, or ECS | About $18 a month against about $146 for the cluster. The load is far below what one server handles. | The load needs more than one server, or downtime during deploys matters |
+| Postgres in a container on the server, with nightly dumps to S3 | RDS | RDS was about $14 a month for a database of a few megabytes, close to half the bill. A tested nightly dump covers the backups. | Losing up to a day of data costs more than $14 a month, or the database outgrows the server |
 | Parameter Store | Secrets Manager | Free, and rotation isn't used | Secrets must rotate on a schedule |
 | n8n for Slack | Calling Slack from the API | Message and channel changes need no deploy | |
 | Lambda for PDF text | Doing it in the API | A large or bad PDF can't slow or crash the API, and it costs nothing while idle | |
@@ -194,7 +195,7 @@ In order, with the next step for each:
 
 - **Callers prove who they are.** Twilio's requests are signed. n8n checks a shared secret header. Agents log in with Argon2-hashed passwords and get a JWT. Admin-only endpoints check the role.
 - **Input is bounded.** Pydantic validates every body, with lengths and `extra="forbid"`. Request bodies are capped at 10 MB plus a little, the largest PDF allowed. Path ids are capped at Postgres's largest integer.
-- **The database is private.** RDS has no public address and lets in only the server's security group. The API connects with TLS and checks the certificate.
+- **The database is private.** Postgres's port isn't published, so only the containers on the server can reach it. The server's role may add backups to S3 but not read or delete them.
 - **No long-lived AWS keys.** The server, the Lambda, and CI use IAM roles, each with only the actions it needs. The server allows only IMDSv2.
 - **`main` is protected.** Changes go through pull requests whose checks must pass.
 
@@ -203,8 +204,8 @@ In order, with the next step for each:
 | Item | A month |
 | --- | ---: |
 | EC2 `t4g.small`, its disk, and its IPv4 address | about $17.50 |
-| RDS `db.t4g.micro` and 20 GB | about $14 |
-| S3, ECR, Lambda, Parameter Store, CloudWatch | under $1 |
+| RDS `db.t4g.micro`, until Stage 10 moved the database onto the server | was about $14 |
+| S3 (including 14 nightly backups), ECR, Lambda, Parameter Store, CloudWatch | under $1 |
 | OpenAI | cents now. At the design target, at most about $70. |
 | Twilio | per message, by Twilio's and Meta's rates |
 | EKS, while it existed | about $0.20 an hour, about $146 a month |

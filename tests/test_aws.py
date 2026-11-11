@@ -343,24 +343,16 @@ def test_cron_runs_the_backup_every_night_from_the_servers_clone(backup_script, 
     assert "\ncd /home/ubuntu/support-ai\n" in backup_script
 
 
-def test_every_restore_is_all_or_nothing_and_leaves_out_rds_users(readme):
-    # The whole command, as above.
+def test_every_restore_is_all_or_nothing_and_leaves_out_owners(readme):
+    # The whole command, as above: the restore drill's, and the one over the real database.
     commands = re.findall(r"postgres pg_restore(?:[^\n\\]|\\\n)*", readme)
-    assert len(commands) == 3
+    assert len(commands) == 2
     for command in commands:
         assert "--no-owner --no-privileges" in command, command
         assert "--single-transaction" in command, command
 
 
-def test_the_move_dumps_rds_with_the_containers_own_postgres(readme):
-    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
-    # The same pg_dump version as the Postgres it's restored into.
-    assert re.findall(r"(\S+) pg_dump --format=custom", readme) == [
-        compose["services"]["postgres"]["image"]
-    ]
-
-
-def test_the_moves_row_count_check_covers_every_table(readme):
+def test_the_restore_drills_row_count_check_covers_every_table(readme):
     [counts] = re.findall(r'COUNTS="([^"]+)"', readme)
     assert set(re.findall(r"count\(\*\) from (\w+)", counts)) == set(Base.metadata.tables)
     # And the migration each database is at.
