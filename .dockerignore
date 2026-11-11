@@ -13,6 +13,7 @@
 !scripts/create_agent.py
 !scripts/export_predictions.py
 !scripts/failed_jobs.py
+!scripts/upload_backup.py
 !infra/aws/rds-ca-us-east-2.pem
 # The model service's code (infra/model.Dockerfile). Not ml/data/ or ml/models/.
 !ml/__init__.py

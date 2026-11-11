@@ -1,5 +1,5 @@
-# The EC2 server's changes to docker-compose.yml: the database is RDS, not a container, the
-# secrets come from Parameter Store, and Caddy serves the API over HTTPS.
+# The EC2 server's changes to docker-compose.yml: the secrets come from Parameter Store, the
+# database keeps its data in a volume of its own, and Caddy serves the API over HTTPS.
 #
 # The server's .env turns this file on with the line below, so a plain `docker compose up`
 # there reads both files, and this one's keys replace the same keys in docker-compose.yml:
@@ -11,16 +11,16 @@ services:
       # The app loads DATABASE_URL, JWT_SECRET_KEY, and the other secrets from here when it
       # starts, with the instance role (infra/aws/README.md).
       PARAMETER_STORE_PATH: /support-ai
-      # !reset drops docker-compose.yml's URL for the postgres container. A variable would
-      # win over Parameter Store, so it must not be set at all.
+      # !reset drops docker-compose.yml's URL for the postgres container, so the DATABASE_URL
+      # line in the server's .env decides. While it's empty, the app uses RDS's URL from
+      # Parameter Store. Once it names the container, it wins over Parameter Store, and the app
+      # uses the container. The README's "Move the database back onto the server" switches it.
       DATABASE_URL: !reset null
 
   migrate:
     environment:
       PARAMETER_STORE_PATH: /support-ai
       DATABASE_URL: !reset null
-    # RDS is always up, so there's no container to wait for.
-    depends_on: !reset {}
 
   # The worker needs the same secrets as the API: the database's URL and the OpenAI key.
   worker:
@@ -28,10 +28,11 @@ services:
       PARAMETER_STORE_PATH: /support-ai
       DATABASE_URL: !reset null
 
-  # A service with a profile only starts when that profile is asked for, so `docker compose up`
-  # leaves Postgres out on the server.
   postgres:
-    profiles: [local-postgres]
+    # A new volume, rather than docker-compose.yml's postgres-data. On the server, that one may
+    # still hold the data from before the move to RDS, which Postgres would start on.
+    volumes: !override
+      - server-postgres-data:/var/lib/postgresql/data
 
   # The server has no saved models of its own, so the service downloads them from S3 when it
   # first starts, with the instance role, into a volume that keeps them for the next container.
@@ -63,6 +64,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  server-postgres-data:
   caddy-data:
   caddy-config:
   model-cache:

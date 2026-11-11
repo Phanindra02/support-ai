@@ -11,6 +11,15 @@
       "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/uploads/*"
     },
     {
+      "Sid": "SaveDatabaseBackups",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::support-ai-docs-phanindra02/backups/*"
+    },
+    {
       "Sid": "ReadDocumentText",
       "Effect": "Allow",
       "Action": "s3:GetObject",
